@@ -303,6 +303,9 @@ api.plugins (T1)        → api.layer, api.resources
   floating tabs to their home or main pane before closing the stage, and CLOSE_CONTENT preserves
   the existing close lifecycle. A compatibility constructor keeps CLOSE_CONTENT as the source
   default. Custom windows reject REDOCK and support HIDE/CLOSE_CONTENT.
+- C3-2t makes keyboard move mode cancel when its window loses focus, in addition to Escape and
+  mouse press. Focus listeners are removed on every end path so a cancelled mover cannot keep
+  intercepting input or retaining the window; cancellation never mutates layout.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

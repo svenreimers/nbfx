@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.logging.Logger;
+import javafx.beans.value.ChangeListener;
 import javafx.event.EventHandler;
 import javafx.geometry.BoundingBox;
 import javafx.geometry.Bounds;
@@ -34,6 +35,7 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseEvent;
+import javafx.stage.Window;
 
 /**
  * A keyboard-driven move of a tab, or of a whole pane, within the main window's {@link DockArea}: the
@@ -140,10 +142,14 @@ final class TabMover {
         active.begin();
     }
 
-    private static void cancelActive() {
+    static void cancelActive() {
         if (active != null) {
             active.end();
         }
+    }
+
+    static boolean isActive() {
+        return active != null;
     }
 
     /**
@@ -188,12 +194,20 @@ final class TabMover {
 
     private final EventHandler<KeyEvent> keyFilter = this::onKey;
     private final EventHandler<MouseEvent> mouseFilter = e -> end();
+    private final ChangeListener<Boolean> focusListener = (obs, was, focused) -> {
+        if (!focused) {
+            end();
+        }
+    };
+    private Window window;
 
     private void begin() {
         scene.addEventFilter(KeyEvent.KEY_PRESSED, keyFilter);
         scene.addEventFilter(MouseEvent.MOUSE_PRESSED, mouseFilter);
-        if (scene.getWindow() != null) {
-            scene.getWindow().requestFocus();
+        window = scene.getWindow();
+        if (window != null) {
+            window.focusedProperty().addListener(focusListener);
+            window.requestFocus();
         }
         current = 0;
         show();
@@ -203,6 +217,10 @@ final class TabMover {
     private void end() {
         scene.removeEventFilter(KeyEvent.KEY_PRESSED, keyFilter);
         scene.removeEventFilter(MouseEvent.MOUSE_PRESSED, mouseFilter);
+        if (window != null) {
+            window.focusedProperty().removeListener(focusListener);
+            window = null;
+        }
         area.hideDropLine();
         if (active == this) {
             active = null;
