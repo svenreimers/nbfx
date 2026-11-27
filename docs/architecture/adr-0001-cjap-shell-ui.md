@@ -330,6 +330,11 @@ api.plugins (T1)        → api.layer, api.resources
   notifications. Handler acceptance, legacy file-open success, rejection/no-handler, and missing
   content-host outcomes are announced; internal tab drags and navigator-owned drop targets stay
   silent.
+- C4-3e extracts a neutral `ExternalDrop` payload from JavaFX `DragEvent` before routing. FILES,
+  URIS, TEXT and NODES branches are directly unit-tested without internal `Dragboard` APIs.
+  `FileDragAndDrop.localFilesFrom` now feeds routing for both native file lists and the private
+  internal-navigator format, fixing internal file drags that previously reached only the legacy
+  fallback.
 
 ### 15. Review resolution: custom-shell composition contract
 

@@ -78,10 +78,10 @@ public final class FileDragAndDrop {
     }
 
     /**
-     * The existing files carried by {@code dragboard}, from an internal drag ({@link #putFiles})
-     * or from an external one (Finder/Explorer), or an empty list if it carries no file.
+     * The local files carried by {@code dragboard}, from an internal drag ({@link #putFiles}) or an
+     * external one (Finder/Explorer), or an empty list if it carries no local file.
      */
-    public static List<FileObject> filesFrom(Dragboard dragboard) {
+    public static List<File> localFilesFrom(Dragboard dragboard) {
         if (dragboard == null) {
             return List.of();
         }
@@ -95,8 +95,16 @@ public final class FileDragAndDrop {
         } else if (dragboard.hasFiles()) {
             files.addAll(dragboard.getFiles());
         }
+        return List.copyOf(files);
+    }
+
+    /**
+     * The existing files carried by {@code dragboard}, from an internal drag ({@link #putFiles})
+     * or from an external one (Finder/Explorer), or an empty list if it carries no file.
+     */
+    public static List<FileObject> filesFrom(Dragboard dragboard) {
         List<FileObject> fileObjects = new ArrayList<>();
-        for (File file : files) {
+        for (File file : localFilesFrom(dragboard)) {
             FileObject fo = FileUtil.toFileObject(FileUtil.normalizeFile(file));
             if (fo != null) {
                 fileObjects.add(fo);

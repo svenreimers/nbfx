@@ -1257,88 +1257,71 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         });
     }
 
-    private record DropRoute(DropRouter.ResolvedDrop resolved, DropDecision rejection, boolean external) {
+    static record DropRoute(DropRouter.ResolvedDrop resolved, DropDecision rejection, boolean external) {
     }
 
     private static DropRoute tryRouteExternalDrop(TabPane tabPane, DragEvent event) {
-        if (FileDragAndDrop.isWithinDropTarget(event.getTarget())) {
+        return routeExternalDrop(tabPane, ExternalDrop.from(tabPane, event), DropRouter.discover());
+    }
+
+    static DropRoute routeExternalDrop(TabPane tabPane, ExternalDrop drop, List<DropHandler> handlers) {
+        if (drop.withinDropTarget()) {
             return new DropRoute(null, null, false);
         }
-        List<org.netbeans.api.nbfx.content.DropTarget> targets = dropTargetsFor(tabPane, event);
+        List<org.netbeans.api.nbfx.content.DropTarget> targets = dropTargetsFor(tabPane, drop.pickedNode());
         if (targets.isEmpty()) {
-            return new DropRoute(null, DropDecision.reject("drop.no-handler"), hasExternalPayload(event));
+            return new DropRoute(null, DropDecision.reject("drop.no-handler"), drop.hasPayload());
         }
-        javafx.geometry.Point2D location = tabPane.sceneToLocal(event.getSceneX(), event.getSceneY());
-        if (location == null) {
-            location = new javafx.geometry.Point2D(event.getX(), event.getY());
-        }
+        javafx.geometry.Point2D location = drop.location();
         org.netbeans.api.nbfx.content.TransferMode requested = org.netbeans.api.nbfx.content.TransferMode.COPY;
-        List<DropHandler> handlers = DropRouter.discover();
-        if (handlers.isEmpty()) {
-            return new DropRoute(null, DropDecision.reject("drop.no-handler"), hasExternalPayload(event));
+        if (handlers == null || handlers.isEmpty()) {
+            return new DropRoute(null, DropDecision.reject("drop.no-handler"), drop.hasPayload());
         }
-        Dragboard db = event.getDragboard();
         DropDecision firstRejection = null;
         boolean attempted = false;
-        if (FileDragAndDrop.hasFiles(db)) {
-            List<java.io.File> files = db.getFiles();
-            if (files != null && !files.isEmpty()) {
-                attempted = true;
-                DropRouter.Resolution resolution = DropRouter.resolveDetailed(
-                        transferSource(TransferKind.FILES, Lookups.fixed(files.toArray(new Object[0]))),
-                        targets, location, requested, Lookup.EMPTY, handlers);
-                if (resolution.accepted()) {
-                    return new DropRoute(resolution.resolved(), null, true);
-                }
+        if (!drop.files().isEmpty()) {
+            attempted = true;
+            DropRouter.Resolution resolution = DropRouter.resolveDetailed(
+                    transferSource(TransferKind.FILES, Lookups.fixed(drop.files().toArray(new Object[0]))),
+                    targets, location, requested, Lookup.EMPTY, handlers);
+            if (resolution.accepted()) {
+                return new DropRoute(resolution.resolved(), null, true);
+            }
+            firstRejection = resolution.rejection();
+        }
+        if (drop.url() != null && !drop.url().isBlank()) {
+            attempted = true;
+            DropRouter.Resolution resolution = DropRouter.resolveDetailed(
+                    transferSource(TransferKind.URIS, Lookups.fixed(drop.url())),
+                    targets, location, requested, Lookup.EMPTY, handlers);
+            if (resolution.accepted()) {
+                return new DropRoute(resolution.resolved(), null, true);
+            }
+            if (firstRejection == null) {
                 firstRejection = resolution.rejection();
             }
         }
-        if (db.hasUrl()) {
-            String url = db.getUrl();
-            if (url != null && !url.isBlank()) {
-                attempted = true;
-                DropRouter.Resolution resolution = DropRouter.resolveDetailed(
-                        transferSource(TransferKind.URIS, Lookups.fixed(url)),
-                        targets, location, requested, Lookup.EMPTY, handlers);
-                if (resolution.accepted()) {
-                    return new DropRoute(resolution.resolved(), null, true);
-                }
-                if (firstRejection == null) {
-                    firstRejection = resolution.rejection();
-                }
+        if (drop.text() != null && !drop.text().isEmpty()) {
+            attempted = true;
+            DropRouter.Resolution resolution = DropRouter.resolveDetailed(
+                    transferSource(TransferKind.TEXT, Lookups.fixed(drop.text())),
+                    targets, location, requested, Lookup.EMPTY, handlers);
+            if (resolution.accepted()) {
+                return new DropRoute(resolution.resolved(), null, true);
+            }
+            if (firstRejection == null) {
+                firstRejection = resolution.rejection();
             }
         }
-        if (db.hasString()) {
-            String text = db.getString();
-            if (text != null && !text.isEmpty()) {
-                attempted = true;
-                DropRouter.Resolution resolution = DropRouter.resolveDetailed(
-                        transferSource(TransferKind.TEXT, Lookups.fixed(text)),
-                        targets, location, requested, Lookup.EMPTY, handlers);
-                if (resolution.accepted()) {
-                    return new DropRoute(resolution.resolved(), null, true);
-                }
-                if (firstRejection == null) {
-                    firstRejection = resolution.rejection();
-                }
-            }
-        }
-        Object gestureSource = event.getGestureSource();
-        if (gestureSource instanceof Node sourceNode && !draggedTab(db).isPresent()) {
+        if (drop.gestureSource() != null && !drop.tabDrag()) {
             attempted = true;
             java.util.List<Object> payload = new java.util.ArrayList<>();
-            payload.add(sourceNode);
-            if (db.hasUrl()) {
-                String url = db.getUrl();
-                if (url != null && !url.isBlank()) {
-                    payload.add(url);
-                }
+            payload.add(drop.gestureSource());
+            if (drop.url() != null && !drop.url().isBlank()) {
+                payload.add(drop.url());
             }
-            if (db.hasString()) {
-                String text = db.getString();
-                if (text != null && !text.isEmpty()) {
-                    payload.add(text);
-                }
+            if (drop.text() != null && !drop.text().isEmpty()) {
+                payload.add(drop.text());
             }
             DropRouter.Resolution resolution = DropRouter.resolveDetailed(
                     transferSource(TransferKind.NODES, Lookups.fixed(payload.toArray(new Object[0]))),
@@ -1352,12 +1335,6 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         }
         return new DropRoute(null, firstRejection == null
                 ? DropDecision.reject("drop.no-handler") : firstRejection, attempted);
-    }
-
-    private static boolean hasExternalPayload(DragEvent event) {
-        Dragboard db = event.getDragboard();
-        return FileDragAndDrop.hasFiles(db) || db.hasUrl() || db.hasString()
-                || event.getGestureSource() instanceof Node && !draggedTab(db).isPresent();
     }
 
     private static void showRoutedDropHighlight(TabPane tabPane, DropRouter.ResolvedDrop routed) {
@@ -1391,20 +1368,19 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         };
     }
 
-    private static List<org.netbeans.api.nbfx.content.DropTarget> dropTargetsFor(TabPane tabPane, DragEvent event) {
+    private static List<org.netbeans.api.nbfx.content.DropTarget> dropTargetsFor(TabPane tabPane, Node pickedNode) {
         if (!(tabPane instanceof NbfxTabPane nbfx)) {
             return List.of();
         }
         List<org.netbeans.api.nbfx.content.DropTarget> targets = new ArrayList<>();
-        tabAt(nbfx, event).flatMap(NbfxTabPane::contentIdForTab).ifPresent(id ->
+        tabAt(nbfx, pickedNode).flatMap(NbfxTabPane::contentIdForTab).ifPresent(id ->
                 targets.add(new org.netbeans.api.nbfx.content.DropTarget(DropTargetKind.CONTENT, id.value())));
         targets.add(new org.netbeans.api.nbfx.content.DropTarget(DropTargetKind.GROUP, nbfx.groupId().value()));
         targets.add(new org.netbeans.api.nbfx.content.DropTarget(DropTargetKind.AREA, nbfx.role().name()));
         return List.copyOf(targets);
     }
 
-    private static Optional<Tab> tabAt(NbfxTabPane tabPane, DragEvent event) {
-        Node picked = event.getPickResult() == null ? null : event.getPickResult().getIntersectedNode();
+    private static Optional<Tab> tabAt(NbfxTabPane tabPane, Node picked) {
         return TabDropIndicator.tabAt(tabPane, picked);
     }
 
