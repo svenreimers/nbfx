@@ -717,6 +717,11 @@ public interface WindowManager {
     DockDecision canDock(DockRequest request);
     DockResult dock(DockRequest request);
 
+    boolean canUndo();
+    void undo();
+    boolean canRedo();
+    void redo();
+
     void attach(ContentId content, DockGroupId group, int index);
     void move(ContentId content, DockGroupId target, int index);
     void select(ContentId content);

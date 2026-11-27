@@ -18,13 +18,16 @@
  */
 package org.netbeans.modules.nbfx.platform.shell;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.net.URL;
@@ -75,7 +78,16 @@ final class DefaultWindowManager implements WindowManager {
     private final AppState appState;
     private final Map<NbfxTabPane, FloatingWindow> floating = new LinkedHashMap<>();
     private final Map<WindowId, CustomWindow> custom = new LinkedHashMap<>();
+    private final Deque<DockEdit> undoStack = new ArrayDeque<>();
+    private final Deque<DockEdit> redoStack = new ArrayDeque<>();
     private MainDockWindow mainWindow;
+
+    private record Location(DockGroupId group, int index, boolean selected) {
+    }
+
+    private record DockEdit(ContentId content, Location undoLocation, Supplier<Boolean> redo,
+            boolean select, BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
+    }
 
     DefaultWindowManager(ContentManager contentManager) {
         this(contentManager, () -> Lookup.getDefault().lookupAll(DockPolicy.class), () -> null);
@@ -130,20 +142,44 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public void move(ContentId content, DockGroupId target, int index) {
-        Tab tab = findTab(content).orElse(null);
-        TabPane pane = paneForGroup(target);
-        if (tab == null || pane == null) {
+        Location before = location(content);
+        if (!moveInternal(content, target, index, false)) {
             return;
         }
-        NbfxTabPane.moveTab(pane, tab, index);
+        Location after = location(content);
+        recordEdit(content, before, false,
+                () -> moveInternal(content, after.group(), after.index(), false));
     }
 
     @Override
     public void attach(ContentId content, DockGroupId group, int index) {
+        Location before = location(content);
+        if (!attachInternal(content, group, index)) {
+            return;
+        }
+        Location after = location(content);
+        recordEdit(content, before, true,
+                () -> attachInternal(content, after.group(), after.index()));
+    }
+
+    private boolean moveInternal(ContentId content, DockGroupId target, int index, boolean select) {
+        Tab tab = findTab(content).orElse(null);
+        TabPane pane = paneForGroup(target);
+        if (tab == null || pane == null) {
+            return false;
+        }
+        NbfxTabPane.moveTab(pane, tab, index);
+        if (select) {
+            NbfxTabPane.selectTabAndMoveToFront(tab);
+        }
+        return true;
+    }
+
+    private boolean attachInternal(ContentId content, DockGroupId group, int index) {
         Tab tab = findTab(content).orElse(null);
         TabPane pane = paneForGroup(group);
         if (tab == null || pane == null) {
-            return;
+            return false;
         }
         if (index < 0 || index >= pane.getTabs().size()) {
             NbfxTabPane.attachTab(pane, tab);
@@ -151,13 +187,15 @@ final class DefaultWindowManager implements WindowManager {
             NbfxTabPane.moveTab(pane, tab, index);
             NbfxTabPane.selectTabAndMoveToFront(tab);
         }
+        return true;
     }
 
     @Override
     public void closeGroup(DockGroupId group) {
         TabPane pane = paneForGroup(group);
-        if (pane != null) {
-            TabContextMenu.closeGroup(pane);
+        if (pane != null && TabContextMenu.closeGroup(pane)) {
+            undoStack.clear();
+            redoStack.clear();
         }
     }
 
@@ -195,6 +233,25 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public DockResult dock(DockRequest request) {
+        Location before = request == null ? null : location(request.content());
+        Tab tab = request == null ? null : findTab(request.content()).orElse(null);
+        TabPane source = tab == null ? null : tab.getTabPane();
+        DockArea<TabPane> area = Docking.area();
+        boolean relocatedSinglePane = source != null && area != null && area.contains(source)
+                && source.getTabs().size() == 1 && source != area.mainPane()
+                && (isEdgePlacement(request.placement()) || isSplitPlacement(request.placement()));
+        DockResult result = performDock(request);
+        if (result.decision().allowed() && before != null && !relocatedSinglePane
+                && result.decision().placement() != DockPlacement.FLOAT
+                && paneForGroup(before.group()) != null) {
+            recordEdit(request.content(), before,
+                    isGroupPlacement(result.decision().placement()),
+                    () -> performDock(request).decision().allowed());
+        }
+        return result;
+    }
+
+    private DockResult performDock(DockRequest request) {
         DockDecision decision = canDock(request);
         if (!decision.allowed()) {
             return DockResult.rejected(decision);
@@ -270,11 +327,75 @@ final class DefaultWindowManager implements WindowManager {
         return DockResult.rejected(DockDecision.reject("dock.placement.unsupported"));
     }
 
+    @Override
+    public boolean canUndo() {
+        while (!undoStack.isEmpty() && !undoStack.peek().undoApplicable().getAsBoolean()) {
+            undoStack.pop();
+        }
+        return !undoStack.isEmpty();
+    }
+
+    @Override
+    public void undo() {
+        if (!canUndo()) {
+            return;
+        }
+        DockEdit edit = undoStack.pop();
+        moveInternal(edit.content(), edit.undoLocation().group(), edit.undoLocation().index(), edit.select());
+        redoStack.push(edit);
+    }
+
+    @Override
+    public boolean canRedo() {
+        while (!redoStack.isEmpty() && !redoStack.peek().redoApplicable().getAsBoolean()) {
+            redoStack.pop();
+        }
+        return !redoStack.isEmpty();
+    }
+
+    @Override
+    public void redo() {
+        if (!canRedo()) {
+            return;
+        }
+        DockEdit edit = redoStack.pop();
+        boolean success = edit.redo().get();
+        if (success) {
+            undoStack.push(edit);
+        }
+    }
+
+    private Location location(ContentId content) {
+        Tab tab = findTab(content).orElse(null);
+        if (tab == null || !(tab.getTabPane() instanceof NbfxTabPane pane)) {
+            return null;
+        }
+        return new Location(pane.groupId(), pane.getTabs().indexOf(tab), tab.isSelected());
+    }
+
+    private void recordEdit(ContentId content, Location before, boolean select,
+            Supplier<Boolean> redo) {
+        if (before == null) {
+            return;
+        }
+        redoStack.clear();
+        DockEdit edit = new DockEdit(content, before, redo, select,
+                () -> paneForGroup(before.group()) != null && findTab(content).isPresent(),
+                () -> findTab(content).isPresent());
+        undoStack.push(edit);
+        while (undoStack.size() > 100) {
+            undoStack.removeLast();
+        }
+    }
+
     // --- Floating windows ------------------------------------------------------------------------
 
     @Override
     public DockWindow floatContent(ContentId content, WindowOptions options) {
-        return floatContentWindow(content, options);
+        DockWindow window = floatContentWindow(content, options);
+        undoStack.clear();
+        redoStack.clear();
+        return window;
     }
 
     private FloatingWindow floatContentWindow(ContentId content, WindowOptions options) {
@@ -302,7 +423,10 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public DockWindow floatGroup(DockGroupId group, WindowOptions options) {
-        return floatGroupWindow(group, options);
+        DockWindow window = floatGroupWindow(group, options);
+        undoStack.clear();
+        redoStack.clear();
+        return window;
     }
 
     private FloatingWindow floatGroupWindow(DockGroupId group, WindowOptions options) {
@@ -372,6 +496,8 @@ final class DefaultWindowManager implements WindowManager {
         CustomWindow window = new CustomWindow(this, id, effective, content, configure);
         custom.put(id, window);
         window.show();
+        undoStack.clear();
+        redoStack.clear();
         return window;
     }
 
@@ -380,7 +506,12 @@ final class DefaultWindowManager implements WindowManager {
         if (!(window instanceof FloatingWindow floating) || floating.owner() != this) {
             return DockResult.rejected(DockDecision.reject("dock.window.missing"));
         }
-        return redockWindow(floating, request);
+        DockResult result = redockWindow(floating, request);
+        if (result.decision().allowed()) {
+            undoStack.clear();
+            redoStack.clear();
+        }
+        return result;
     }
 
     private DockResult redockWindow(FloatingWindow window, DockRequest request) {
@@ -488,6 +619,8 @@ final class DefaultWindowManager implements WindowManager {
 
     void removeCustomWindow(CustomWindow window) {
         custom.remove(window.windowId(), window);
+        undoStack.clear();
+        redoStack.clear();
     }
 
     void closeFloatingWindow(FloatingWindow window) {
@@ -503,6 +636,10 @@ final class DefaultWindowManager implements WindowManager {
                     floating.remove(window.pane(), window);
                 }
             }
+        }
+        if (!window.stage().isShowing()) {
+            undoStack.clear();
+            redoStack.clear();
         }
     }
 

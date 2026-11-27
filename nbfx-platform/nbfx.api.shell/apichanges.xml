@@ -374,6 +374,24 @@
             <class package="org.netbeans.api.nbfx.shell" name="DockPolicySpec"/>
             <class package="org.netbeans.api.nbfx.shell" name="DockPolicy"/>
         </change>
+        <change id="cjap.shell.dock-undo">
+            <api name="netbeansfx_shell"/>
+            <summary>Programmatic docking undo and redo.</summary>
+            <version major="1" minor="17"/>
+            <date day="27" month="11" year="2026"/>
+            <author login="svenreimers"/>
+            <compatibility addition="yes" modification="yes" binary="incompatible" source="incompatible" semantic="incompatible"/>
+            <description>
+                Adds <code>WindowManager.canUndo</code>, <code>undo</code>,
+                <code>canRedo</code> and <code>redo</code>. One successful programmatic
+                move/attach/dock operation is one edit; redo re-executes split/edge requests so
+                removed target groups are recreated. Non-main single-pane relocations and
+                float/redock/custom/close operations currently invalidate history instead of
+                recording partial edits. The interface expansion is intentionally incompatible for
+                external <code>WindowManager</code> implementers.
+            </description>
+            <class package="org.netbeans.api.nbfx.shell" name="WindowManager"/>
+        </change>
     </changes>
     <htmlcontents>
         <head>

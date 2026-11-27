@@ -111,6 +111,29 @@ public interface WindowManager {
     DockResult dock(DockRequest request);
 
     /**
+     * Whether a programmatic move/attach/dock gesture can be undone. Pointer and keyboard gestures
+     * are wired to the same edit units as they become available.
+     *
+     * @return whether undo is available
+     * @since 1.17
+     */
+    boolean canUndo();
+
+    /** Undoes the most recent programmatic layout gesture on the JavaFX Application Thread. */
+    void undo();
+
+    /**
+     * Whether the most recently undone gesture can be redone.
+     *
+     * @return whether redo is available
+     * @since 1.17
+     */
+    boolean canRedo();
+
+    /** Redoes the most recently undone gesture on the JavaFX Application Thread. */
+    void redo();
+
+    /**
      * Floats {@code content} into a new window, preserving its content instance.
      *
      * @param content the content to float

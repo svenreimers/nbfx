@@ -363,25 +363,23 @@ public final class TabContextMenu {
     }
 
     /** Closes every tab of {@code pane}, confirming the unsaved editors once; an emptied pane goes away by itself. */
-    static void closeGroup(TabPane pane) {
-        if (pane != null) {
-            closeTabs(pane, List.copyOf(pane.getTabs()));
-        }
+    static boolean closeGroup(TabPane pane) {
+        return pane != null && closeTabs(pane, List.copyOf(pane.getTabs()));
     }
 
     /** Closes every tab of {@code tab}'s pane but {@code tab} itself. */
-    private static void closeOthers(Tab tab) {
+    private static boolean closeOthers(Tab tab) {
         TabPane pane = tab.getTabPane();
         if (pane == null) {
-            return;
+            return false;
         }
         List<Tab> others = new ArrayList<>(pane.getTabs());
         others.remove(tab);
-        closeTabs(pane, others);
+        return closeTabs(pane, others);
     }
 
     /** Closes {@code tabs} of {@code pane}: the editors first, all confirmed at once, then the views unless cancelled. */
-    private static void closeTabs(TabPane pane, List<Tab> tabs) {
+    private static boolean closeTabs(TabPane pane, List<Tab> tabs) {
         List<EditorDocument> documents = new ArrayList<>();
         List<Tab> views = new ArrayList<>();
         for (Tab tab : tabs) {
@@ -394,7 +392,9 @@ public final class TabContextMenu {
         }
         if (DocumentCloser.closeDocuments(documents)) {
             views.forEach(NbfxTabPane::closeTab);
+            return true;
         }
+        return false;
     }
 
     // --- Maximize --------------------------------------------------------------------------------

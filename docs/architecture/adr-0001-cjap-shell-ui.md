@@ -312,6 +312,10 @@ api.plugins (T1)        → api.layer, api.resources
   reason keys.
 - C3-2v standardizes `DockWindow.show()` as show + to-front + focus request for main, floating and
   custom windows through one helper, so programmatic window activation matches user expectations.
+- C3-2w adds bounded `WindowManager` undo/redo for programmatic move/attach/dock gestures. Each
+  successful operation records source/tab order and selection; split/edge redo re-executes the
+  request so removed target groups are recreated. Non-main single-pane relocations and
+  float/redock/custom/close operations invalidate history rather than recording partial edits.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler
