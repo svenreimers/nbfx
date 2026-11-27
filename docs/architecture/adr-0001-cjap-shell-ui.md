@@ -310,6 +310,8 @@ api.plugins (T1)        → api.layer, api.resources
   placement, mode, cross-area and float predicates. Identity resolvers are injected, keeping the
   API independent of concrete managers; empty sets are unrestricted and rejections carry stable
   reason keys.
+- C3-2v standardizes `DockWindow.show()` as show + to-front + focus request for main, floating and
+  custom windows through one helper, so programmatic window activation matches user expectations.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

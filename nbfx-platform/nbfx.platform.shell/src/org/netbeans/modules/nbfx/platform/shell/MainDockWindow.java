@@ -117,7 +117,7 @@ final class MainDockWindow implements DockWindow {
 
     @Override
     public void show() {
-        stage.show();
+        WindowActivation.show(stage);
     }
 
     @Override

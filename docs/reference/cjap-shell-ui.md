@@ -768,7 +768,8 @@ public interface DockWindow {
 }
 ```
 
-A `CUSTOM` window may have no `LayoutNode`; its `WindowContent` owns the scene graph.
+A `CUSTOM` window may have no `LayoutNode`; its `WindowContent` owns the scene graph. `show()`
+brings the window to the front and requests focus.
 
 ```java
 public record WindowId(String namespace, String name) {}

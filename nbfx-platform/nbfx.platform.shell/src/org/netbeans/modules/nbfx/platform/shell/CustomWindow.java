@@ -119,7 +119,7 @@ final class CustomWindow implements DockWindow {
         if (closed) {
             throw new IllegalStateException("Window is closed");
         }
-        stage.show();
+        WindowActivation.show(stage);
     }
 
     @Override

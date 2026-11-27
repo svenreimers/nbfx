@@ -44,7 +44,7 @@ public interface DockWindow {
     /** The content hosted by this window. */
     WindowContent content();
 
-    /** Shows the window. */
+    /** Shows, brings to the front and requests focus for the window. */
     void show();
 
     /** Hides the window without closing its content. */
