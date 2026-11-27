@@ -306,6 +306,10 @@ api.plugins (T1)        → api.layer, api.resources
 - C3-2t makes keyboard move mode cancel when its window loses focus, in addition to Escape and
   mouse press. Focus listeners are removed on every end path so a cancelled mover cannot keep
   intercepting input or retaining the window; cancellation never mutates layout.
+- C3-2u adds immutable `DockPolicySpec` and `DockPolicy.fromSpec` for declarative kind, area,
+  placement, mode, cross-area and float predicates. Identity resolvers are injected, keeping the
+  API independent of concrete managers; empty sets are unrestricted and rejections carry stable
+  reason keys.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

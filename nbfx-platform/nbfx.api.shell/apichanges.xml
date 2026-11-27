@@ -357,6 +357,23 @@
             <class package="org.netbeans.api.nbfx.shell" name="WindowOptions"/>
             <class package="org.netbeans.api.nbfx.shell" name="DockWindow"/>
         </change>
+        <change id="cjap.shell.dock-policy-spec">
+            <api name="netbeansfx_shell"/>
+            <summary>Declarative DockPolicySpec and executable policy factory.</summary>
+            <version major="1" minor="16"/>
+            <date day="27" month="11" year="2026"/>
+            <author login="svenreimers"/>
+            <compatibility addition="yes" semantic="compatible"/>
+            <description>
+                Adds immutable <code>DockPolicySpec</code> and
+                <code>DockPolicy.fromSpec</code>. The factory evaluates content kind, target area,
+                placement, transfer mode, cross-area movement and floating permission with stable
+                rejection reason keys. Empty sets are unrestricted; identity resolution remains
+                injectable so the API does not depend on a concrete content or layout manager.
+            </description>
+            <class package="org.netbeans.api.nbfx.shell" name="DockPolicySpec"/>
+            <class package="org.netbeans.api.nbfx.shell" name="DockPolicy"/>
+        </change>
     </changes>
     <htmlcontents>
         <head>

@@ -667,7 +667,10 @@ public interface DockPolicy {
 }
 ```
 
-Built-in policies are composed from small predicates. Rejections always carry a reason key.
+Built-in policies are composed from small predicates. `DockPolicy.fromSpec(spec, contentKinds,
+groupAreas)` executes declarative specifications with injectable identity resolvers. Empty sets are
+unrestricted; rejections use `dock.policy.kind`, `dock.policy.area`, `dock.policy.placement`,
+`dock.policy.mode`, `dock.policy.cross-area` or `dock.policy.float`.
 
 ### 7.2 Placements
 
