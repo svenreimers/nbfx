@@ -36,10 +36,11 @@ Navigation: [previous: content, view, and editor lifecycle](19-content-view-and-
 | Neutral transfer/target/request/decision/handler API | **Implemented** | Public `api.content` contracts with validation. |
 | `DropRouter` discovery and deterministic first-accept routing | **Implemented** | Global services first, then layer handlers; target order is caller-supplied. |
 | `@DropRegistration` layer generation | **Implemented** | Compile-time validation and `NbFx/DropHandlers` entries. |
-| External drag routing over shell tab panes | **Implemented** | Files/URIs/text/node gestures are tried before legacy file-open fallback. |
+| External drag routing over shell tab panes | **Implemented** | A package-private neutral adapter captures files/URIs/text/node data; internal navigator files now reach FILES handlers before legacy fallback. |
+| Direct adapter routing tests | **Implemented** | `ExternalDropRoutingTest` constructs `ExternalDrop` and calls the routing method without a real `Dragboard`. |
 | Internal tab reorder/split/float | **Legacy** | Direct `Tab`/`DockArea` implementation, not generic `Content` transfer. |
 | File-open fallback | **Legacy** | Opens files through the editor-specific `ContentManager`. |
-| Keyboard move alternative | **Implemented** | `TabMover` supports join/split/area candidates with arrows, Enter, Escape. |
+| Keyboard move alternative | **Implemented** | `TabMover` supports arrows/Enter and cancellation by Escape, mouse press, or window focus loss, with listener/drop-line cleanup. |
 | Drop result accessible announcements | **Implemented** | Accepted/rejected external results update accessible text/help. |
 | Pointer tab drags using `DockPolicy` | **Target only** | Pointer tab drags bypass `DropRouter` and `DefaultWindowManager.canDock`. |
 | Overlay/window/global target integration in the shell | **Target only** | Vocabulary exists; pane routing supplies only CONTENT/GROUP/AREA. |
@@ -296,6 +297,10 @@ This path uses internal `Tab` and workspace `DropTarget` objects. It does **not*
 [chapter 10](10-docking-requests-and-policies.md); pointer tab dragging does not inherit it in this
 baseline.
 
+The external adapter's `tabDrag` flag does not make a realistic labeled tab drag invisible: it
+suppresses NODES, but the drag's title string can still be offered to TEXT handlers. See the adapter
+and test limitations in section 20.6.
+
 ## 20.6 External DropRouter pipeline over a tab pane
 
 `NbfxTabPane.addFileDropHandlers` installs event filters for non-slide panes. The sliding panel has no
@@ -312,10 +317,11 @@ sequenceDiagram
     participant A11y as DropAccessibility
 
     OS->>Pane: DRAG_OVER / DRAG_DROPPED
-    Pane->>Route: target under pointer
-    Route->>Route: marked navigator target? -> silent no-op
+    Pane->>Route: tryRouteExternalDrop
+    Route->>Route: ExternalDrop.from + DropRouter.discover (eager)
+    Route->>Route: navigator-owned target? -> silent no-op
     Route->>Route: CONTENT if resolvable, then GROUP, then AREA
-    Route->>Router: discover handlers
+    Route->>Route: null/empty handlers -> drop.no-handler
     Route->>Router: FILES, then URIS, then TEXT, then NODES
     Router->>H: evaluate matching target/source once
     H-->>Router: decision
@@ -338,6 +344,78 @@ sequenceDiagram
         end
     end
 ```
+
+### Neutral drag adapter and file extraction
+
+[`ExternalDrop`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ExternalDrop.java)
+is a package-private record in `platform.shell`, not product API:
+
+```java
+record ExternalDrop(
+        List<File> files,
+        String url,
+        String text,
+        Node gestureSource,
+        Node pickedNode,
+        Point2D location,
+        boolean withinDropTarget,
+        boolean tabDrag) {}
+```
+
+Its compact constructor converts null files to an empty list and defensively copies with
+`List.copyOf`. `ExternalDrop.from(pane, event)` captures:
+
+| Field | Source |
+|---|---|
+| `files` | `FileDragAndDrop.localFilesFrom(event.getDragboard())` |
+| `url` | Dragboard URL when `hasUrl()` |
+| `text` | Dragboard string when `hasString()` |
+| `gestureSource` | Event gesture source when it is a JavaFX `Node`, otherwise null |
+| `pickedNode` | Intersected node from `event.getPickResult()`, otherwise null |
+| `location` | Pane-local scene coordinates, falling back to event-local x/y |
+| `withinDropTarget` | Whether the event target is inside a node marked by `FileDragAndDrop.markDropTarget` |
+| `tabDrag` | Whether the dragboard carries a known private nbfx tab id |
+
+`hasPayload()` is exactly:
+
+```text
+nonempty files
+    OR nonnull/nonblank URL
+    OR nonnull/nonempty text (whitespace-only text counts)
+    OR nonnull gestureSource when tabDrag is false
+```
+
+[`FileDragAndDrop.localFilesFrom`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FileDragAndDrop.java)
+first checks whether the private `application/x-nbfx-files` content is a string. If so, it splits
+that string on newlines, skips blank entries, and creates `File` objects. Those private paths **win**
+over `Dragboard.getFiles()` even when standard files are also present. Only when the private content
+is not a string does it fall back to `hasFiles()`/`getFiles()`. It returns an immutable list and does
+not normalize paths or require the files to exist.
+
+This fixes the previous internal-navigator gap: private navigator file drags now produce a nonempty
+FILES source and can reach FILES handlers. The legacy `filesFrom`/cached `FileObject` resolution uses
+the same extraction before converting to `FileObject`.
+
+### Production routing order
+
+`tryRouteExternalDrop` is a one-line composition:
+
+```java
+return routeExternalDrop(pane, ExternalDrop.from(pane, event), DropRouter.discover());
+```
+
+Java evaluates the adapter and handler discovery before entering `routeExternalDrop`. Therefore
+payload parsing, coordinate conversion, owned-target inspection, and global/layer handler discovery
+happen **eagerly even for a navigator-owned no-op**. Only then does routing:
+
+1. return a non-external no-op for `withinDropTarget`;
+2. build CONTENT/GROUP/AREA targets from the captured picked node;
+3. return synthetic `drop.no-handler` for an empty target list or null/empty handler list;
+4. try FILES, URIS, TEXT, then NODES with requested mode `COPY` and context `Lookup.EMPTY`.
+
+`DropRouter.resolveDetailed` itself rejects a null handler collection, but the shell routing method
+checks null/empty first and returns its own `drop.no-handler` route. Handler `evaluate` exceptions and
+later `perform` exceptions are not caught by this pipeline.
 
 ### Target order
 
@@ -374,10 +452,10 @@ The shell tries sources in this exact order, stopping at the first accepted hand
 
 | Order | `TransferKind` | Detection | `TransferSource.data()` | Requested mode/context |
 |---:|---|---|---|---|
-| 1 | `FILES` | `FileDragAndDrop.hasFiles(db)` and nonempty `db.getFiles()` | `Lookups.fixed` of the dragboard's `File` objects | `COPY`, `Lookup.EMPTY` |
-| 2 | `URIS` | `db.hasUrl()` and nonblank `db.getUrl()` | Lookup containing the URL string | `COPY`, `Lookup.EMPTY` |
-| 3 | `TEXT` | `db.hasString()` and nonempty string | Lookup containing the text | `COPY`, `Lookup.EMPTY` |
-| 4 | `NODES` | gesture source is a JavaFX `Node` and this is not an internal tab drag | Lookup containing the source node, then URL/text if present | `COPY`, `Lookup.EMPTY` |
+| 1 | `FILES` | Nonempty `ExternalDrop.files()` from `localFilesFrom` | `Lookups.fixed` of the immutable `File` list | `COPY`, `Lookup.EMPTY` |
+| 2 | `URIS` | Nonnull, nonblank adapted URL | Lookup containing the URL string | `COPY`, `Lookup.EMPTY` |
+| 3 | `TEXT` | Nonnull, nonempty adapted text; whitespace counts | Lookup containing the text | `COPY`, `Lookup.EMPTY` |
+| 4 | `NODES` | Nonnull gesture-source `Node` and `tabDrag == false` | Lookup containing the source node, then nonblank URL/nonempty text if present | `COPY`, `Lookup.EMPTY` |
 
 The location is `tabPane.sceneToLocal(event.getSceneX(), event.getSceneY())`, with event-local
 coordinates as a fallback. The router receives one tab-pane-local point for all targets.
@@ -387,9 +465,13 @@ Important limitations:
 - The shell always requests `COPY`; it does not translate JavaFX modifier keys into neutral MOVE/LINK.
 - `context` is always `Lookup.EMPTY`; selected content, shell services, and action metadata are not
   supplied to the handler.
-- Internal navigator file drags use private format `application/x-nbfx-files`. `hasFiles` sees them,
-  but `db.getFiles()` is empty, so they do not become a neutral FILES source. They can still use the
-  legacy file-open fallback.
+- Internal navigator file drags use private format `application/x-nbfx-files`; `localFilesFrom` now
+  extracts those newline-separated paths, so they reach FILES handlers as well as the legacy
+  file-open fallback.
+- `tabDrag` suppresses only the NODES source and the gesture-node term of `hasPayload()`. It does not
+  suppress FILES, URIS, or TEXT. A real internal tab drag includes its title as a string, so a
+  nonempty title can still route to TEXT handlers; only a no-text adapter value makes the tab drag
+  payload-free.
 - NODES is not a `NodeModel`/selection adapter. It exposes the JavaFX gesture-source node plus any
   URL/text. Multi-selection order and domain-node semantics are not reconstructed.
 - A drag carrying files and text can evaluate FILES handlers first, then URIS/TEXT/NODES handlers if
@@ -400,11 +482,13 @@ Important limitations:
 ### Navigator-owned targets
 
 `FileDragAndDrop.markDropTarget(node)` marks a node/ancestor as owning file drops. If the event target
-is within such a node, `tryRouteExternalDrop` and `openableFilesOf` both leave the gesture alone. This
-lets navigator trees import files into their own folders instead of the editor pane opening them.
+is within such a node, `routeExternalDrop` and `openableFilesOf` leave the gesture alone. This lets
+navigator trees import files into their own folders instead of the editor pane opening them. The
+adapter and handler discovery have already run before this no-op, as described above.
 
 The private internal file format deliberately prevents dropping nbfx navigator files into another
-application. External Finder/Explorer files use the standard JavaFX file list.
+application. External Finder/Explorer files use the standard JavaFX file list when no private string
+payload is present.
 
 ## 20.7 Acceptance, rejection, and legacy fallback
 
@@ -434,11 +518,12 @@ handlers/targets/source kinds. If none accepts, the shell tries the legacy file 
 openable file may still open even though a FILES handler rejected it; the handler rejection is only
 announced if there is no successful fallback.
 
-If no handler matches or all reject, `resolveDetailed` supplies a rejection for that source attempt.
-Across source attempts, the shell retains the earliest non-null result; this may be a synthetic
-`drop.no-handler` from an earlier FILES/URI/TEXT attempt even when a later source has a more specific
-real rejection. There is no visual rejection reason on hover; feedback is primarily the absence of an
-accepted highlight plus the post-drop announcement.
+If the target list or handler list is empty, shell routing returns synthetic `drop.no-handler`
+without evaluating a handler. Otherwise, if no handler matches or all reject, `resolveDetailed`
+supplies a rejection for that source attempt. Across source attempts, the shell retains the earliest
+non-null result; this may be a synthetic `drop.no-handler` from an earlier FILES/URI/TEXT attempt even
+when a later source has a more specific real rejection. There is no visual rejection reason on hover;
+feedback is primarily the absence of an accepted highlight plus the post-drop announcement.
 
 ### Legacy file-open fallback
 
@@ -503,9 +588,11 @@ uses JavaFX accessible-attribute notifications, not a dedicated ARIA live region
 - `drop.open.failed` becomes `no content host is available`.
 - Any other reason key is inserted verbatim; there is no bundle lookup for product reason keys.
 
-Internal tab drags and navigator-owned drop targets are intentionally silent. A no-handler external
-gesture is announced only when it has a recognized external payload/attempt. The implementation test
-is [`DropAccessibilityTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/DropAccessibilityTest.java).
+Navigator-owned drop targets are silent. An internal tab drag is silent only when its adapted payload
+is empty: `tabDrag` suppresses NODES but not the title TEXT, so a realistic labeled tab drag may be
+routed and announced as TEXT. A no-handler gesture is announced only when routing marks it external.
+The implementation test is
+[`DropAccessibilityTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/DropAccessibilityTest.java).
 
 ## 20.9 Keyboard move alternative
 
@@ -514,16 +601,21 @@ is launched by the tab context menu's Move/Move Group commands. It is a move UI,
 `DropHandler` keyboard protocol.
 
 ```text
-Start: install scene key/mouse filters, focus window, show first candidate
+Start: install scene key/mouse filters and window-focus listener; focus window; show first candidate
 Arrow keys: choose nearest candidate in that direction
-Enter: perform join/move/split and clear filters/line
-Escape or mouse press: cancel without moving
+Enter: perform join/move/split, then run full cleanup
+Escape, mouse press, or window focus loss: cancel without moving and run full cleanup
+Cleanup: remove key/mouse filters and focus listener, hide drop line/frame, clear active mover
 ```
 
 Candidates include joining each other pane, splitting beside eligible panes, and docking along the
 four area edges when more than one leaf exists. Moving a single-tab pane avoids a meaningless
 self-split. Moving a detached group either joins its tabs into another pane or creates a new main-area
 pane and closes the detached window.
+
+[`TabMoverTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/TabMoverTest.java)
+covers Escape cancellation and explicit `cancelActive()`, including the invariant that the tab stays
+in its original pane. It does **not** assert window-focus-loss cancellation or listener cleanup.
 
 ## 20.10 Copyable handler example
 
@@ -594,8 +686,9 @@ product recipe.
 
 - **Compile time:** invalid handler type/constructor, invalid target/source token, empty sources, blank
   target id, or duplicate class/target registration fails annotation processing.
-- **Routing time:** null required router arguments throw `NullPointerException`; no matching handler
-  yields `drop.no-handler`; handler exceptions are not isolated.
+- **Routing time:** null required `DropRouter` arguments throw `NullPointerException`; shell routing
+  separately converts a null/empty handler list to `drop.no-handler`. No matching handler yields the
+  same synthetic reason, and handler exceptions are not isolated.
 - **Construction time:** a view tab with an unsafe id can throw while the shell derives its CONTENT
   target id.
 - **Drop time:** a handler's `perform` owns its mutation and error reporting. The shell does not roll
@@ -624,7 +717,8 @@ product recipe.
   [`DropRegistrationProcessor`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/modules/nbfx/api/content/processors/DropRegistrationProcessor.java)
 - [`DropRouter`](../../../nbfx-platform/nbfx.platform.content/src/org/netbeans/modules/nbfx/platform/content/DropRouter.java)
 - [`NbfxTabPane`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/NbfxTabPane.java)
-  (internal drag handlers and `tryRouteExternalDrop`),
+  (internal drag handlers and `routeExternalDrop`),
+  [`ExternalDrop`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ExternalDrop.java),
   [`FileDragAndDrop`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FileDragAndDrop.java)
 - [`TabDropIndicator`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/TabDropIndicator.java),
   [`TabDragOverlays`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/TabDragOverlays.java),
@@ -640,9 +734,17 @@ product recipe.
   covers generated attributes, invalid sources, duplicate registration, and processor discovery.
 - [`DropAccessibilityTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/DropAccessibilityTest.java)
   covers accepted/rejected messages and preservation of existing accessible text.
+- [`ExternalDropRoutingTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ExternalDropRoutingTest.java)
+  directly constructs the neutral adapter and checks FILES/URIS/TEXT/NODES routing, source priority,
+  rejection retention, and no-text tab-drag/navigator-owned no-ops. Its tab-drag fixture has no text,
+  so it does not prove silence for a realistic labeled tab drag.
+- [`TabMoverTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/TabMoverTest.java)
+  covers Escape and explicit cancellation, not window focus loss.
 
-There is no dedicated end-to-end JavaFX dragboard integration test for `tryRouteExternalDrop`, the
-legacy fallback, placeholder highlighting, or screen-overlay floating in this baseline.
+`ExternalDropRoutingTest` does not exercise a real `Dragboard`, `ExternalDrop.from`, private
+`application/x-nbfx-files` parsing, handler `perform`, the legacy fallback, highlighting, accessible
+announcements, or screen-overlay floating. There is still no dedicated end-to-end JavaFX dragboard
+integration test for those paths.
 
 ## 20.13 Current vs target
 
@@ -651,11 +753,12 @@ internal content/group drags to use docking policy, external/domain drags to rou
 content/overlay/group/area/global handlers, Escape cancellation, ordered multi-selection, non-color
 rejection reasons, and keyboard/command equivalents for every operation.
 
-The baseline has the neutral contracts, deterministic handler routing, pane integration, file fallback,
-visual feedback, announcements, and a keyboard move UI. It does not unify internal tab drags with
-`DockPolicy`, does not integrate the full target chain, and does not implement the complete node,
-Escape, keyboard-drop, localization, or accessibility semantics. The shell-local generic manager also
-leaves standard editor headers without CONTENT targets unless a product publishes that manager
-globally.
+The baseline has the neutral contracts, a testable drag adapter, deterministic handler routing, pane
+integration, file fallback, visual feedback, announcements, and a keyboard move UI with focus-loss
+cancellation. Adapter tests do not cover real dragboard/private-format parsing or end-to-end behavior,
+and a labeled internal tab drag can still reach TEXT handlers. The baseline does not unify internal
+tab drags with `DockPolicy`, integrate the full target chain, or implement complete node, Escape,
+keyboard-drop, localization, or accessibility semantics. The shell-local generic manager also leaves
+standard editor headers without CONTENT targets unless a product publishes that manager globally.
 
 Next: [21. Threading, focus, and accessibility](21-threading-focus-and-accessibility.md).

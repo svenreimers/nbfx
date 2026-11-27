@@ -44,6 +44,13 @@ transitive dependencies and not test dependencies.
 | `nbfx.platform.launcher` | Platform bootstrap and `AppProvider` selection | Upstream `core.startup`, modules, util, util.ui; ordering-only dependency on `defaults` | **Implemented**. |
 | `nbfx.platform.status` / `nbfx.api.status` | Status renderer/API used by the default frame | Platform status implementation and API | **Implemented** for current shell status needs. |
 
+At this baseline, `nbfx.api.shell` has specification version `1.16`
+([manifest.mf](../../../nbfx-platform/nbfx.api.shell/manifest.mf)). `nbfx.platform.shell` declares a
+minimum `api.shell` dependency of `1.15`
+([project.xml](../../../nbfx-platform/nbfx.platform.shell/nbproject/project.xml)), matching the
+`WindowClosePolicy` API used by the implementation. `DockPolicySpec`/`fromSpec` are since `1.16` but
+are not yet wired into production shell code.
+
 Common external dependencies include the nbfx JavaFX wrapper library
 (`org.netbeans.libs.nbfx.javafx`), `org.openide.util`, `org.openide.util.lookup`, and, where the
 module uses files/layer data, `org.openide.filesystems`. The shell implementation additionally
@@ -182,7 +189,8 @@ org.netbeans.api.nbfx.shell
   ShellApplication-facing API:
     ShellContext, ShellWindow, ShellProvider, ShellFrame, ShellRegionHost,
     ShellChromeProfile/ShellProfileSpec/ShellProfileResolver,
-    WindowManager, DockWindow, WindowOptions, WindowContent,
+    WindowManager, DockWindow, WindowOptions, WindowClosePolicy, WindowContent,
+    DockPolicySpec, DockPolicy.fromSpec,
     WindowSystem, WindowSink, WindowState, AreaState,
     shutdown/*
 
@@ -199,6 +207,7 @@ org.netbeans.api.nbfx.content
 org.netbeans.modules.nbfx.platform.shell
   Live composition and legacy shell:
     ShellApplication, DefaultWindowManager, DockRuntime, Docking,
+    WindowActivation, ExternalDrop, FileDragAndDrop.localFilesFrom,
     NbfxTabPane, SlidingArea, AppState, SessionRestorer, frames/chrome
 
 org.netbeans.modules.nbfx.platform.workspace
@@ -241,7 +250,7 @@ Target-only module boundaries not present at this baseline:
 | Target module | Status | Current nearest reality |
 |---|---|---|
 | `api.theme` | **Target only** | Theme API package is exported from `platform.theme`. |
-| `api.docking` | **Target only** | Docking requests/policies currently live in `api.shell`; dock implementation lives in `platform.workspace`/`platform.shell`. |
+| `api.docking` | **Target only** | `DockPolicySpec` and executable docking contracts now live in `api.shell`; moving them to `api.docking` and wiring layout policy ids remain target work. Dock implementation remains in `platform.workspace`/`platform.shell`. |
 | `platform.docking` | **Target only** | `DockArea`/`DockTree` are in `platform.workspace`; `DockRuntime` is in `platform.shell`. |
 | `platform.shell.default` | **Target only** | `DefaultShellFrame` and renderers are inside `platform.shell`. |
 | `platform.design` | **Target only** | Current CSS/control kit is not a separate design-system module. |

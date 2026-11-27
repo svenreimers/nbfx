@@ -20,7 +20,7 @@
 -->
 # 24. Annotations and layer schema
 
-**Baseline:** `f2e43e8b58`.
+**Baseline:** `60143d8f59`.
 This chapter describes what processors generate and what runtime readers actually accept. It does not substitute the target reference's intended schema for the baseline implementation.
 
 ## 24.1 Complete `NbFx` path inventory

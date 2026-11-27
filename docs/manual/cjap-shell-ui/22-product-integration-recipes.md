@@ -20,7 +20,7 @@
 -->
 # 22. Product integration recipes
 
-These recipes use APIs available at baseline `f2e43e8b58`. They deliberately call out where a recipe
+These recipes use APIs available at baseline `60143d8f59`. They deliberately call out where a recipe
 is a current integration technique rather than the completed CJAP product model. Product code should
 import public API/SPI and JavaFX types, not `org.netbeans.modules.nbfx.platform.*` implementation
 types.
@@ -40,7 +40,7 @@ Navigation: [previous: threading, focus, and accessibility](21-threading-focus-a
 | Startup views through `@ViewRegistration` + `ViewProvider` service | **Legacy** | Existing view-area/window-system defaults and one-time introduction behavior. |
 | API-only custom `ShellProvider`/`ShellFrame` | **Implemented** | Exactly one provider; runtime host and exact DOCK root required; rollback on invalid composition. |
 | Profile-driven frames for floating/custom windows | **Target only** | Profiles are selected for the main frame; custom `WindowContent` does not invoke `ShellProvider`. |
-| Custom `WindowContent` window with bounds persistence | **Implemented** | Main/floating/custom enumeration, hide/show/close, stable id, remembered bounds. |
+| Custom `WindowContent` window with bounds persistence | **Implemented** | Stable id, remembered bounds, best-effort activation, and HIDE/CLOSE_CONTENT policies; custom REDOCK is rejected. |
 | Full custom-window content/session restore | **Target only** | Shell does not call `WindowContent.saveState()` or recreate custom windows. |
 | Save/reset main window state through `WindowSystem` | **Implemented** | `save` and `resetLayout` after load; reset clears workspace state and offers computed defaults to the sink, whose shell adapter applies geometry only. |
 | Generic content persistence/source routing | **Target only** | `ContentStateStore` is not wired; generic manager accepts ready-made content only. |
@@ -77,6 +77,11 @@ flowchart TD
     HOST --> DOCK[Exact runtime DOCK root = SlidingArea]
     CM --> TABS[View/editor tabs and dock operations]
     DOCK --> TABS
+    CM --> CREATE[WindowManager.createCustomWindow]
+    CREATE --> POLICY{WindowClosePolicy}
+    POLICY -->|HIDE| HIDE[Keep window and content live]
+    POLICY -->|REDOCK| REJECT[Reject custom REDOCK]
+    POLICY -->|CLOSE_CONTENT| CLOSE[Dispose content and remove window]
 ```
 
 Important composition rules:
@@ -90,7 +95,8 @@ Important composition rules:
   uses the **Legacy** chrome path instead.
 - A custom frame is a visual adapter. Runtime services, region lifecycle, and dock ownership remain
   shell-owned.
-- Custom `WindowContent` is a separate window recipe, not a custom main `ShellFrame`.
+- Custom `WindowContent` is a separate window recipe, not a custom main `ShellFrame`. Its
+  `WindowClosePolicy` controls hide versus content disposal; custom `REDOCK` is rejected.
 
 ## 22.3 Recipe: neutral default shell
 
@@ -580,22 +586,52 @@ WindowOptions options = new WindowOptions(
         500, 350,
         true,           // resizable
         true,           // remember bounds by stable WindowId
-        null);          // default native stage decoration
+        null);          // decoration; 11-arg constructor defaults to CLOSE_CONTENT
 
 DockWindow window = windows.createCustomWindow(id, options, new InspectorContent(id));
 ```
 
+The canonical record constructor takes a twelfth `WindowClosePolicy` argument. To keep the window and
+content live when the user closes it, use this as an alternative to the preceding options construction:
+
+```java
+WindowOptions hideOptions = new WindowOptions(
+        WindowKind.CUSTOM,
+        null,
+        "Inspector",
+        null,
+        shellWindow.stage(),
+        false,
+        500, 350,
+        true,
+        true,
+        null,
+        WindowClosePolicy.HIDE);
+
+DockWindow hiddenOnClose = windows.createCustomWindow(
+        id, hideOptions, new InspectorContent(id));
+```
+
+`closePolicy` itself is nonnull; the 11-argument compatibility constructor supplies
+`WindowClosePolicy.CLOSE_CONTENT`.
+
 Current behavior:
 
-- `kind` must be `CUSTOM`; wrong kind, duplicate live id, null arguments, or an already-attached root
-  throw `IllegalArgumentException`/`NullPointerException`.
+- `kind` must be `CUSTOM`; wrong kind, custom `REDOCK`, duplicate live id, null arguments, or an
+  already-attached root throw `IllegalArgumentException`/`NullPointerException`.
 - A non-`Parent` root is wrapped in a `StackPane`. A root with a scene or parent is rejected.
 - Owner, modality, title, icon, decoration, resizability, position, and dimensions are applied before
   show. Missing/invalid icon resources log and keep the default icon.
+- `show()` uses `WindowActivation`: `show`, `toFront`, then `requestFocus`. This is best-effort window
+  activation, not tab/logical-context selection.
 - `layout()` is null. `state()` contains geometry and the explicit profile id, but no custom content
   payload.
-- Hide keeps the window live and enumerated; close disposes `WindowContent` once, removes the window,
-  and prevents re-showing. A closed `show()` throws `IllegalStateException`.
+- `HIDE`: native close requests and `DockWindow.close()` hide the window but keep it live/enumerated;
+  `WindowContent.close()` is not called and `show()` can reactivate it.
+- `REDOCK`: rejected by `createCustomWindow` with `IllegalArgumentException("Custom windows cannot
+  redock content")`; the public redock operation accepts floating windows only.
+- `CLOSE_CONTENT` (the 11-argument default): native/programmatic close disposes `WindowContent` once,
+  removes the window, and prevents re-showing. A closed `show()` throws `IllegalStateException`.
 - `rememberBounds` saves on hide/close and restores by `WindowId`, overriding constructor dimensions
   and clamping to visible screens.
 - `WindowContent.saveState()` is not called by `CustomWindow`; products must persist their own opaque
@@ -751,7 +787,8 @@ Test checklist:
 - profile published before provider creation and decoration applied before show;
 - contribution fresh-node/unparented rules, update/dispose, per-reference action failure isolation;
 - startup view first run, persisted omission, newly introduced default, and missing host pane;
-- custom window duplicate id, attached root, hide/show/close, one-time content close, remembered bounds;
+- custom window duplicate id, attached root, HIDE versus CLOSE_CONTENT, REDOCK rejection, activation,
+  one-time content close, remembered bounds;
 - `WindowSystem` lifecycle guards and reset scope;
 - FX-thread rejection for frame/region lifecycle and no worker-thread scene mutation;
 - generic content veto/dispose and tab close deferred past a same-pulse move;
@@ -771,7 +808,7 @@ Test checklist:
 | Invalid frame/root/host/DOCK | Rollback closes created frame/host/resolver | Correct composition; do not attach a raw dock node. |
 | Missing view host pane | `ViewManager` logs and returns | Register the pane/area or choose an available default location. |
 | Invalid view/action/drop registration | Compile-time processor error | Fix annotation/type/token/constructor; do not work around with runtime reflection. |
-| Duplicate custom window id / attached root / wrong kind | `IllegalArgumentException` | Use a fresh stable id/root and `WindowKind.CUSTOM`. |
+| Duplicate custom window id / attached root / wrong kind / custom REDOCK policy | `IllegalArgumentException` | Use a fresh stable id/root, `WindowKind.CUSTOM`, and HIDE or CLOSE_CONTENT. |
 | Save/reset before load | `IllegalStateException` | Run after shell startup/load on FX. |
 | Background shutdown timeout/failure | Logged; FX callback still schedules exit | Make cleanup bounded/idempotent; do not rely on UI work during shutdown. |
 
@@ -811,10 +848,12 @@ Test checklist:
 
 - [`WindowManager`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowManager.java),
   [`WindowOptions`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowOptions.java),
+  [`WindowClosePolicy`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java),
   [`WindowContent`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContent.java),
   [`WindowContentState`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContentState.java),
   [`DockWindow`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockWindow.java)
 - [`CustomWindow`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java),
+  [`WindowActivation`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java),
   [`DefaultWindowManager`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java)
 - [`WindowSystem`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowSystem.java),
   [`DefaultWindowSystem`](../../../nbfx-platform/nbfx.platform.workspace/src/org/netbeans/modules/nbfx/platform/workspace/DefaultWindowSystem.java)
@@ -835,7 +874,12 @@ Test checklist:
   and [`ProductProviderTest`](../../../nbfx-platform/nbfx.api.product/test/unit/src/org/netbeans/api/nbfx/product/ProductProviderTest.java)
   cover metadata validation and exactly-one resolution.
 - [`CustomWindowTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java)
-  covers enumeration, close/hide, duplicate/attached roots, and remembered bounds.
+  covers enumeration, default content close, HIDE, custom REDOCK rejection, duplicate/attached roots,
+  and remembered bounds.
+- [`WindowManagerTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java)
+  covers floating HIDE/REDOCK/CLOSE_CONTENT behavior, and
+  [`WindowActivationTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowActivationTest.java)
+  covers show/toFront requests.
 - [`FxWindowSystemTest`](../../../nbfx-platform/nbfx.platform.workspace/test/unit/src/org/netbeans/modules/nbfx/platform/workspace/FxWindowSystemTest.java)
   covers save/reset/lifecycle guards and default fallback.
 

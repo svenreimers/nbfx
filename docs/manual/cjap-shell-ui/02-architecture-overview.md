@@ -88,6 +88,15 @@ flowchart TB
         AS --> HOOK
     end
 
+    subgraph HELPERS["Window and drop helpers"]
+        ACT["WindowActivation<br/>show → toFront → requestFocus"]
+        DROP["ExternalDrop + localFilesFrom<br/>testable payload adaptation"]
+        HANDLES["FloatingWindow / CustomWindow<br/>WindowClosePolicy dispatch"]
+        WM -. "close dispatch" .-> HANDLES
+        HANDLES -. "show/activate" .-> ACT
+        TABS -. "external-drop routing" .-> DROP
+    end
+
     subgraph STORE["Separate persistence owner"]
         CS["ContentStateStore<br/>standalone; no shell wiring"]
     end
@@ -110,7 +119,9 @@ new shell replaces it, and `DockRuntime.dispose()` does not clear it.
 | `WindowSink` | The seam for applying one `WindowState`, capturing one `WindowState`, and showing/hiding the main window. | Persistence itself; window-system phase transitions. |
 | `DockRuntime` | One `DockArea`, one `SlidingArea`, composition, area/location lookup maps, empty-pane retention during startup. | Content close/dispose; window-state persistence (`saveLayout()` is empty); global facade cleanup. |
 | `Docking` | **Legacy** static delegation to the most recently registered runtime. | Independent runtime ownership or safe multi-shell isolation. |
-| `DefaultWindowManager` | Public content/group operations, floating/custom handles, policy evaluation, and custom-bound persistence hooks. | A dedicated injected `DockRuntime`; most runtime access still goes through static `Docking`. |
+| `DefaultWindowManager` | Public content/group operations, floating/custom handles, `WindowClosePolicy` dispatch, policy evaluation, and custom-bound persistence hooks. | A dedicated injected `DockRuntime`; most runtime access still goes through static `Docking`. |
+| `WindowActivation` | Consistent public-handle show behavior: `show()`, `toFront()`, `requestFocus()`. | A target `FocusController` or logical-selection model. |
+| `ExternalDrop` / `FileDragAndDrop.localFilesFrom` | Neutral drag payload adaptation and local-file extraction for testable routing. | Drop-handler ownership, policy decisions, or content opening. |
 | `DefaultContentManager` | Open content by `ContentId`, active-content property, close/dispose calls. | Multiple instances of one `ContentId`; content-state persistence; tab order or window placement. |
 | `AppState` | Preferences snapshots for toolbars/editor settings/introduced views/project-tree hooks; serialized legacy pane layout; remembered custom bounds. | The window system's main geometry after migration; content payloads; a unified all-window session. |
 | `SessionRestorer` | FX-thread capture/restore of legacy panes, tabs, detached windows, editor view state, and startup views. | Target `SessionState`; custom-window recreation; `ContentStateStore`; independent per-shell dock access. |
@@ -208,7 +219,7 @@ module list, friend packages, and target differences are in
 | JavaFX thread | `ShellApplication.start/stop`, frame/region lifecycle, live `WindowSink` methods, `WindowManager` scene mutations, and `SessionRestorer` run on the JavaFX Application Thread. |
 | `WindowSystem` contract | All public methods are documented as FX-thread calls. `DefaultWindowSystem` synchronizes its lifecycle and public listener methods; `setSink` is an unsynchronized volatile write. Tests may drive the pure orchestration headlessly. |
 | Region lifecycle | Mount/update/dispose/close require the FX thread. Mounted node identity is stable; contribution/renderer/scoped-command resources are disposed by the host. |
-| Content lifecycle | The per-shell `DefaultContentManager` owns `close()` then `dispose()`. Host removal alone does not close content. `open`, `close`, `find`, and `openContent` are synchronized; `activeContent()` simply returns the observable property and is not synchronized. |
+| Content lifecycle | The per-shell `DefaultContentManager` owns `close()` then `dispose()`. Host removal alone does not close content. `open`, `close`, `find`, and `openContent` are synchronized; `activeContent()` simply returns the observable property and is not synchronized. `WindowClosePolicy.HIDE` and `REDOCK` preserve live content; `CLOSE_CONTENT` enters the normal editor/view close lifecycle. Custom `REDOCK` is invalid. |
 | Window-system save | `saveStarted` runs before `sink.snapshot()`; `saveCompleted` runs after `store.save(...)`. The store write occurs on the calling FX thread. |
 | AppState save | Uses volatile snapshots and a one-shot `AtomicBoolean`; it may run on the JVM shutdown hook. It must not read live scene nodes off the FX thread. |
 | Custom bounds | Saved synchronously with a preferences flush when a custom window hides or closes, on the FX thread. |
@@ -243,6 +254,7 @@ application-scoped owner. The baseline instead has:
 - a per-shell `ShellApplication` but a global `WindowSystem` service;
 - an instance `DockRuntime` behind a legacy static facade;
 - a per-shell content manager beside legacy global editor/view services;
+- individual `WindowClosePolicy` dispatch, but no owner-close propagation or unified multi-window shutdown;
 - a functioning legacy layout/session path beside a separate window-system persistence path; and
 - static tab/theme/current-window state.
 
@@ -258,7 +270,14 @@ where possible. Do not make new product code depend on `ShellApplication`, `Dock
 - [DefaultWindowManager.java](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java)
 - [DefaultWindowSystem.java](../../../nbfx-platform/nbfx.platform.workspace/src/org/netbeans/modules/nbfx/platform/workspace/DefaultWindowSystem.java)
 - [DefaultContentManager.java](../../../nbfx-platform/nbfx.platform.content/src/org/netbeans/modules/nbfx/platform/content/DefaultContentManager.java)
+- [WindowClosePolicy.java](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java)
+- [DockPolicySpec.java](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicySpec.java)
+- [WindowActivation.java](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java)
+- [ExternalDrop.java](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ExternalDrop.java)
+- [FileDragAndDrop.java](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FileDragAndDrop.java)
 - [DockRuntimeIsolationTest.java](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/DockRuntimeIsolationTest.java)
+- [WindowActivationTest.java](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowActivationTest.java)
+- [ExternalDropRoutingTest.java](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ExternalDropRoutingTest.java)
 - [ShellContentManagerTest.java](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ShellContentManagerTest.java)
 
 Continue with [module map and dependencies](03-module-map-and-dependencies.md),

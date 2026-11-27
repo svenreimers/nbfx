@@ -20,7 +20,7 @@
 -->
 # 9. WindowManager and identities
 
-**Baseline:** `f2e43e8b58` (C3-2r).
+**Baseline:** `60143d8f59` (C4-3e).
 **Audience:** product code that locates, selects, moves, attaches, or closes docked content.
 
 ## 9.1 Status at a glance
@@ -31,6 +31,9 @@
 | `DefaultWindowManager` | **Implemented**, internally | The implementation is package-private and translates handles to internal tab-pane operations. |
 | Stable ids for live panes | **Implemented** | Permanent roles have role-derived ids; docked/detached panes have unique sequenced ids. |
 | Generic content lookup | **Partial** | Only `ViewContent`, `EditorContent`, and the `nbfx:view.*` convention resolve to tabs. Arbitrary open `Content` does not. |
+| `WindowClosePolicy` and floating close dispatch | **Implemented** | `HIDE`, `REDOCK`, and `CLOSE_CONTENT` are dispatched by floating handles and native close requests. |
+| Custom-window close dispatch | **Partial** | `HIDE` and `CLOSE_CONTENT` work; `REDOCK` is rejected for custom windows. |
+| `DockWindow.show()` activation | **Implemented** | Main, floating, and custom handles show, bring to front, and request focus through `WindowActivation`. |
 | Group enumeration as a pure logical-area model | **Partial** | Enumeration includes all tracked panes, including transient/minimized/slide state, not only pure `DockGroupSpec`s. |
 | Public tab/pane-handle operations | **Legacy** | `Tab` and `WindowPaneHost` remain in the platform, but are not `WindowManager` operation handles. |
 | Target `DockController`, `api.docking` contracts, and complete cross-window identity routing | **Target only** | Docking request types still live in `api.shell`; no `api.docking` module exists in this baseline. |
@@ -263,6 +266,36 @@ View tab removal is deferred with `Platform.runLater`; editor closing uses the e
 
 For a single tab, plain pointer close uses the same document confirmation for editors and direct close for views. Shift+close invokes close-all; Alt/Option+close invokes close-other for editor tabs. See [pane behavior](11-docking-operations-and-pane-behavior.md).
 
+### 9.5.5 `DockWindow.show()` and close-policy dispatch
+
+Sources: [`WindowClosePolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java), [`WindowActivation.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java), [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java).
+
+`DockWindow.show()` now calls `WindowActivation.show(stage)`, which performs `stage.show()`,
+`stage.toFront()`, and `stage.requestFocus()`. A closed floating/custom handle still throws
+`IllegalStateException` when shown again.
+
+`WindowOptions.closePolicy()` controls what `DockWindow.close()` and the native close request do:
+
+| Policy | Floating window | Custom window |
+|---|---|---|
+| `HIDE` | Hides the stage; handle, pane, tabs, and content stay live/managed and can be shown or redocked later. | Hides the stage; handle and content stay live/managed. |
+| `REDOCK` | Moves tabs to their live home pane or main fallback, releases floating chrome, unregisters detached/docked pane identity, and selects the previously selected tab. | Rejected by `createCustomWindow` with `IllegalArgumentException`. |
+| `CLOSE_CONTENT` | Runs the normal floating-pane editor/view close lifecycle, including existing close confirmation behavior. | Calls `WindowContent.close()`, removes the handle, and closes the stage. |
+
+For floating native close requests, `HIDE` and `REDOCK` are consumed and dispatched by the handle;
+`CLOSE_CONTENT` follows the normal close path. Custom native close requests consume/hide for
+`HIDE`; otherwise they dispose the custom content host.
+
+The eleven-argument `WindowOptions` compatibility constructor defaults to `CLOSE_CONTENT`, and the
+built-in floating options use it. The target's default floating `REDOCK` policy is therefore not
+the current default.
+
+Close policy is behavior, not content ownership. `HIDE` and `REDOCK` preserve content and do not
+call its close/dispose lifecycle. `CLOSE_CONTENT` enters that lifecycle; generic content remains
+owned by `DefaultContentManager`, while a custom window invokes its `WindowContent.close()` host
+cleanup directly. Placement operations such as move, attach, float, and explicit `redock` still do
+not close content.
+
 ## 9.6 Example: use handles, not tabs
 
 ```java
@@ -289,9 +322,10 @@ Use `org.netbeans.api.nbfx.shell.PaneRole` here, not the pure layout role with t
 
 ## 9.7 Ownership, threading, and failure rules
 
-- `WindowManager` does not own content close/dispose. Moving, attaching, selecting, or floating changes placement only.
+- `WindowManager` does not own content close/dispose. Moving, attaching, selecting, floating, and explicit redocking change placement only.
 - `DefaultContentManager` owns open content and calls `Content.close()` then `Content.dispose()` when its own close operation succeeds.
 - `closeGroup` intentionally enters the normal editor/view close lifecycle; it is not a mere detach.
+- `WindowClosePolicy.HIDE` and `REDOCK` preserve content; `CLOSE_CONTENT` enters the normal close lifecycle. Custom `REDOCK` is invalid, and custom `CLOSE_CONTENT` calls `WindowContent.close()` directly.
 - Manager collections are snapshots. Holding a `DockGroupId` does not keep the pane alive; later operations can report it missing.
 - The content manager is per-shell, but pane tracking and the active `Docking` area are still process-wide. Two concurrent managers are not fully isolated from each other's panes.
 - No method enforces FX-thread affinity at runtime. Calling mutation methods from a background thread violates the contract and can corrupt scene state or throw JavaFX errors.
@@ -302,12 +336,14 @@ Use `org.netbeans.api.nbfx.shell.PaneRole` here, not the pure layout role with t
 
 - [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java) — all algorithms in this chapter.
 - [`NbfxTabPane.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/NbfxTabPane.java) — group assignment, tracked-pane order, tab lookup, move/select/close, slide lending.
-- [`WindowManagerTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) — group/content operations, unique docked ids, normal close lifecycle, policies, relative placement, split/edge, float/redock, and main-first enumeration.
-- [`DockWindowContractTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) — window-id and opaque content-state contracts.
+- [`WindowManagerTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) — group/content operations, unique docked ids, normal close lifecycle, policies, relative placement, split/edge, float/redock, main-first enumeration, and floating `HIDE`/`REDOCK` close behavior.
+- [`CustomWindowTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java) — custom close/hide/re-show, `HIDE` policy, `REDOCK` rejection, and remembered bounds.
+- [`WindowActivationTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowActivationTest.java) — show brings the stage to front.
+- [`DockWindowContractTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) — window-id, opaque content-state, and compatibility-constructor `CLOSE_CONTENT` default.
 - [`DefaultContentManager.java`](../../../nbfx-platform/nbfx.platform.content/src/org/netbeans/modules/nbfx/platform/content/DefaultContentManager.java) and [`DefaultContentManagerTest.java`](../../../nbfx-platform/nbfx.platform.content/test/unit/src/org/netbeans/modules/nbfx/platform/content/DefaultContentManagerTest.java) — open-content ownership.
 
 ## 9.9 Current versus target
 
 The target keeps `WindowManager` as the public operation surface but places docking contracts in `api.docking`, introduces an internal controller, and guarantees content/group routing independent of tab implementation. This baseline has the public handle surface and a working adapter, but content lookup is still coupled to `ViewContent`/`EditorContent` and internal tabs.
 
-The target also separates logical areas, physical groups, and runtime window states. Here, live `PaneRole` still contains `DOCKED`/`DETACHED`/`SLIDE`, and `groups()` exposes tracked panes rather than a declarative group registry. See [current-to-target migration](27-current-to-target-migration.md).
+The target also separates logical areas, physical groups, and runtime window states. Here, live `PaneRole` still contains `DOCKED`/`DETACHED`/`SLIDE`, and `groups()` exposes tracked panes rather than a declarative group registry. Individual `WindowClosePolicy` dispatch now exists, but owner-window propagation and a unified multi-window close state machine remain target-only. See [current-to-target migration](27-current-to-target-migration.md).

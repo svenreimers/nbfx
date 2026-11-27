@@ -20,7 +20,7 @@
 -->
 # 13. Main, custom, and multiwindow handles
 
-**Baseline:** `f2e43e8b58` (C3-2r).
+**Baseline:** `60143d8f59` (C4-3e).
 **Audience:** product developers creating custom windows and maintainers working on enumeration, close, or persistence.
 
 ## 13.1 Status at a glance
@@ -35,14 +35,15 @@
 | Duplicate custom ids and attached-root rejection | **Implemented** | Duplicate ids are checked within the custom-window map; roots with a scene or parent are rejected. |
 | Remembered custom bounds (`AppState`, C3-2r) | **Implemented** | Opt-in bounds save on hide/close, restore by stable `WindowId`, and off-screen fallback. |
 | Complete multiwindow persistence/chrome | **Partial** | No `SessionState` restore, per-window shell frame/profile composition, or full content-state round-trip. |
-| `WindowClosePolicy` | **Target only** | No REDOCK/CLOSE_CONTENT/HIDE policy contract exists. |
+| `WindowClosePolicy` for custom windows | **Implemented** | HIDE keeps the window live; CLOSE_CONTENT uses dispose-once/stage close; REDOCK is rejected at creation. MAIN has no policy dispatch/cascade. |
+| Close-policy persistence and owner-window cascade | **Target only** | `closePolicy` is not persisted and MAIN close does not apply it to owned windows. |
 | `FocusController` | **Target only** | No controller separates OS activation, logical selection, and keyboard focus. |
 
 See [floating and redocking](12-floating-and-redocking.md) for floating-specific lifecycle and [window state and persistence](07-window-state-and-persistence.md) for the legacy state system.
 
 ## 13.2 Handle and content contracts
 
-Sources: [`DockWindow.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockWindow.java), [`WindowContent.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContent.java), [`WindowContentState.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContentState.java), [`WindowId.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowId.java).
+Sources: [`DockWindow.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockWindow.java), [`WindowContent.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContent.java), [`WindowContentState.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContentState.java), [`WindowId.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowId.java), [`WindowOptions.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowOptions.java), [`WindowClosePolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java).
 
 ```java
 public interface DockWindow {
@@ -139,8 +140,8 @@ Source: [`MainDockWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/o
 | `window()` | The shell's `Stage`. |
 | `content().root()` | The runtime `SlidingArea`, not the whole custom/default frame root. |
 | `layout()` | Converts the **current** `DockArea.tree()` to `LayoutNode.Group`/`Split`, pairing depth-first leaves with each pane's unique group id. |
-| `show()` / `hide()` | Direct `Stage.show()` / `Stage.hide()`. |
-| `close()` | Direct `Stage.close()`; the adapter itself has no owned-window close-policy cascade. |
+| `show()` / `hide()` | `show()` uses `WindowActivation` (`show`, `toFront`, `requestFocus`); `hide()` directly hides. A closed main stage can be shown again. |
+| `close()` | Direct `Stage.close()`; the adapter itself has no `WindowClosePolicy` dispatch or owned-window cascade. |
 | `state()` | Live visible pane/view snapshots merged with shell geometry/profile state. |
 | `content().lookup()` | Empty unless the main stage is focused; then uses global `ActiveComponentContext` and its active component lookup. |
 | `content().saveState()` | Empty payload with the main id and current layout. |
@@ -165,24 +166,26 @@ flowchart TD
     B -- no --> X1[NullPointerException]
     B -- yes --> C{options.kind == CUSTOM?}
     C -- no --> X2[IllegalArgumentException]
-    C -- yes --> D{custom id already live?}
-    D -- yes --> X3[IllegalArgumentException]
-    D -- no --> E[compute default or remembered bounds]
-    E --> F[construct CustomWindow]
-    F --> G{content.root non-null and unparented?}
-    G -- no --> X4[NPE for null / IAE if attached]
-    G -- yes --> H[create Stage and Scene; apply stylesheet/theme/options]
-    H --> I[put in custom map]
-    I --> J[show and return handle]
-    J --> K{hide}
-    K --> L[Stage.hide; save remembered bounds; remain live]
-    L --> J
-    J --> M{close or native close request}
-    M --> N[dispose once]
-    N --> O[save bounds if enabled]
-    O --> P[content.close]
-    P --> Q[finally remove from manager]
-    Q --> R[closed handle; show throws IllegalStateException]
+    C -- yes --> D{closePolicy == REDOCK?}
+    D -- yes --> X3[IllegalArgumentException: Custom windows cannot redock content]
+    D -- no --> E{custom id already live?}
+    E -- yes --> X4[IllegalArgumentException]
+    E -- no --> F[compute default or remembered bounds]
+    F --> G[construct CustomWindow]
+    G --> H{content.root non-null and unparented?}
+    H -- no --> X5[NPE for null / IAE if attached]
+    H -- yes --> I[create Stage and Scene; apply stylesheet/theme/options]
+    I --> J[put in custom map]
+    J --> K[WindowActivation.show and return handle]
+    K --> L{close or native close request}
+    L --> M{closePolicy?}
+    M -->|HIDE| N[consume native request if needed; hide and save bounds; remain live]
+    N --> K
+    M -->|CLOSE_CONTENT| O[dispose once]
+    O --> P[save bounds if enabled]
+    P --> Q[content.close]
+    Q --> R[finally remove from manager]
+    R --> S[closed handle; show throws IllegalStateException]
 ```
 
 ### 13.5.1 Creation rules
@@ -191,9 +194,10 @@ flowchart TD
 
 1. Non-null id, options, and content.
 2. `options.kind() == WindowKind.CUSTOM`.
-3. No existing live custom entry with the same id.
-4. Optional remembered bounds when `rememberBounds` is true and an `AppState` is present.
-5. Construction of `CustomWindow`, which requires a non-null root with both `root.getScene() == null` and `root.getParent() == null`.
+3. `options.closePolicy() != WindowClosePolicy.REDOCK`; otherwise `IllegalArgumentException("Custom windows cannot redock content")`.
+4. No existing live custom entry with the same id.
+5. Optional remembered bounds when `rememberBounds` is true and an `AppState` is present; the effective options retain `closePolicy`.
+6. Construction of `CustomWindow`, which requires a non-null root with both `root.getScene() == null` and `root.getParent() == null`.
 
 The root is mounted as follows:
 
@@ -208,12 +212,12 @@ A null root throws `NullPointerException`; an attached root throws `IllegalArgum
 ### 13.5.2 Hide versus close
 
 - `hide()` hides the stage, saves remembered bounds when enabled, and leaves the content/handle live.
-- `show()` shows the same stage; after close it throws `IllegalStateException`.
-- `close()` is idempotent. It clears the stage close-request handler, calls `dispose()`, then closes the stage.
-- A native close request also calls `dispose()`; JavaFX then performs normal stage closing.
+- `show()` uses `WindowActivation.show` (`show`, `toFront`, `requestFocus`) on the same stage; after CLOSE_CONTENT disposal it throws `IllegalStateException`.
+- With `WindowClosePolicy.HIDE`, direct `close()` simply hides. A native close request is consumed and hides as well—no confirmation or content close occurs, and the handle remains enumerated/re-showable.
+- With `WindowClosePolicy.CLOSE_CONTENT`, direct `close()` clears the stage close-request handler, calls `dispose()`, then closes the stage. A native close request calls `dispose()` and JavaFX performs normal stage closing.
 - `dispose()` sets `closed=true` before calling `content.close()`, saves bounds, and removes the handle in a `finally` block.
-- Therefore `content.close()` is invoked at most once per handle even if close is repeated or native/programmatic paths race on the FX thread.
-- If `content.close()` throws, the exception propagates, but manager removal still happens. In the programmatic `close()` path, the subsequent `stage.close()` is not reached because `dispose()` threw.
+- Therefore CLOSE_CONTENT invokes `content.close()` at most once per handle even if close is repeated or native/programmatic paths race on the FX thread.
+- If `content.close()` throws, the exception propagates, but manager removal still happens. In the programmatic CLOSE_CONTENT path, the subsequent `stage.close()` is not reached because `dispose()` threw.
 
 Duplicate-id rejection applies to hidden windows too. Once close/dispose removes the entry, the id can be reused with a fresh unattached root.
 
@@ -285,7 +289,7 @@ The manager writes current stage x/y/width/height only when `rememberBounds` is 
 Not persisted by C3-2r:
 
 - maximized/iconic state (`WindowBounds.maximized` is false for custom records);
-- owner, modality, resizability, title, icon, decoration, or chrome profile;
+- owner, modality, resizability, title, icon, decoration, chrome profile, or `closePolicy`;
 - custom `WindowContent.saveState()` payload;
 - open/closed window set, z-order, active window, or complete `SessionState`.
 
@@ -322,10 +326,12 @@ public record AreaState(String areaId, List<String> viewIds, String activeViewId
 
 ## 13.9 Options and chrome boundaries
 
-The shared stage configurator applies `WindowOptions` to custom stages exactly as described for floating stages, with two important differences:
+The shared stage configurator applies `WindowOptions` to custom stages exactly as described for floating stages, with these important differences:
 
 - `kind` must be `CUSTOM`, not `FLOATING`.
 - `rememberBounds` is implemented through `AppState` for custom windows.
+- `closePolicy` may be `HIDE` or `CLOSE_CONTENT`; `REDOCK` is rejected before construction.
+- `WindowActivation.show` is best-effort native activation only. It does not establish logical content context or replace the target `FocusController`.
 
 Still not implemented for custom windows:
 
@@ -370,7 +376,8 @@ final class InspectorContent implements WindowContent {
 WindowId id = WindowId.of("product:window.inspector");
 WindowOptions options = new WindowOptions(
         WindowKind.CUSTOM, null, "Inspector", null, null,
-        false, 500, 350, true, true, WindowDecoration.NATIVE);
+        false, 500, 350, true, true, WindowDecoration.NATIVE,
+        WindowClosePolicy.CLOSE_CONTENT);
 
 DockWindow window = windows.createCustomWindow(
         id, options, new InspectorContent(id));
@@ -388,6 +395,7 @@ Use a fresh unparented root for each creation. If the content itself is a generi
 |---|---|
 | Null id/options/content | `NullPointerException`. |
 | Non-CUSTOM kind | `IllegalArgumentException`. |
+| Custom `REDOCK` close policy | `IllegalArgumentException("Custom windows cannot redock content")`. |
 | Duplicate live custom id | `IllegalArgumentException`. |
 | Null content root | `NullPointerException`. |
 | Root already has scene or parent | `IllegalArgumentException`. |
@@ -402,17 +410,18 @@ Ownership invariants:
 - The manager owns handle registration/enumeration, not domain content.
 - The product owns `WindowContent` resources and must implement its host cleanup.
 - `AppState` owns only the narrow custom geometry record described above.
-- Main-window close does not apply a target policy to floating/custom windows. Any broader shutdown behavior belongs to the shell shutdown lifecycle, not this adapter contract.
+- Main-window close does not dispatch `WindowClosePolicy` or cascade to floating/custom windows. Any broader shutdown behavior belongs to the shell shutdown lifecycle, not this adapter contract.
 
 ## 13.12 Tests and source map
 
-- [`CustomWindowTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java) — create/enumerate/hide/show, duplicate id, attached root, one close with a boolean closed flag, and remembered bounds across managers; it does not exercise an exactly-once race.
-- [`WindowManagerTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) — main state merge, main-before-one-floating order, and hidden-main retention; it does not prove multi-floating/custom ordering.
-- [`DockWindowContractTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) — window-id grammar and opaque state copying.
-- [`MainDockWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/MainDockWindow.java), [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java), [`FloatingWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java).
+- [`CustomWindowTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java) — create/enumerate/hide/show, duplicate id, attached root, one close with a boolean closed flag, custom HIDE, custom REDOCK rejection, and remembered bounds across managers; it does not exercise an exactly-once race.
+- [`WindowManagerTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) — main state merge, main-before-one-floating order, hidden-main retention, and floating HIDE/REDOCK close behavior; it does not prove multi-floating/custom ordering.
+- [`DockWindowContractTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) — window-id grammar, opaque state copying, and the 11-argument `WindowOptions` default/null-policy contract.
+- [`WindowActivationTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowActivationTest.java) — `WindowActivation.show` shows and requests `toFront`; it does not verify native focus or logical context.
+- [`MainDockWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/MainDockWindow.java), [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java), [`FloatingWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java), [`WindowActivation.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java).
 
 ## 13.13 Current versus target
 
 The [target reference](../../reference/cjap-shell-ui.md#8-windows-and-chrome-profiles) expects one `DockRuntime` to coordinate MAIN/FLOATING/CUSTOM windows, per-window chrome profiles, explicit close policy, deterministic focus, and `WindowStateStore` ownership of `SessionState`. This baseline provides usable handles and a narrow custom-bounds preference, but not complete multiwindow restoration or chrome.
 
-`WindowClosePolicy` and `FocusController` are **Target only** in this baseline. Do not claim that remembered bounds, a profile id in `WindowState`, or `windows()` enumeration amounts to complete multiwindow persistence. See [current-to-target migration](27-current-to-target-migration.md).
+`WindowClosePolicy` is now **Implemented** for floating/custom stages: floating supports HIDE/REDOCK/CLOSE_CONTENT, while custom supports HIDE/CLOSE_CONTENT and rejects REDOCK. `FocusController`, MAIN policy cascade, and close-policy persistence remain **Target only**. Do not claim that remembered bounds, a profile id in `WindowState`, or `windows()` enumeration amounts to complete multiwindow persistence. See [current-to-target migration](27-current-to-target-migration.md).

@@ -417,9 +417,36 @@ Sources:
 [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java),
 [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java).
 
-`WindowOptions` has no convenience constructor/default factory; callers provide all fields,
-including `rememberBounds`. Dimensions must be finite and positive. The built-in floating default
-options use `rememberBounds=false`.
+`WindowOptions` is a record with twelve canonical components, ending in `closePolicy`:
+
+```java
+public record WindowOptions(
+        WindowKind kind,
+        ShellChromeProfile profile,
+        String title,
+        ResourceRef icon,
+        Window owner,
+        boolean modal,
+        double width,
+        double height,
+        boolean resizable,
+        boolean rememberBounds,
+        WindowDecoration decoration,
+        WindowClosePolicy closePolicy) {}
+```
+
+The eleven-argument compatibility constructor omits `closePolicy` and defaults it to
+`WindowClosePolicy.CLOSE_CONTENT`. There is still no no-argument constructor or default factory.
+`kind` and `closePolicy` must be non-null, and dimensions must be finite and positive. The built-in
+floating default options use the compatibility constructor, so their policy is `CLOSE_CONTENT`
+(not the target's eventual default floating `REDOCK`) and `rememberBounds=false`.
+
+`WindowClosePolicy` has three values: `HIDE` keeps the window/content live and managed; `REDOCK`
+moves floating content back into the main window and is invalid for custom windows; `CLOSE_CONTENT`
+uses the normal close lifecycle. The policy is an in-memory `WindowOptions` value only: the shell
+does not persist it in `WindowState`, `AppState`, or workspace `ViewStateStore`, and no shell path
+writes it to `ContentStateStore`. A later launch must supply the policy again when recreating a
+window.
 
 For `WindowManager.createCustomWindow(...)`:
 
@@ -527,7 +554,7 @@ aggregates or stores those states.
 | Handle | `state()` behavior | `content().saveState()` behavior |
 |---|---|---|
 | Main | One docked `AreaState` per live dock leaf keyed by group id (`detached=false`, NaN area geometry); only non-blank view ids are listed, so editor tabs are omitted. Main-window geometry/profile/view payload come from the shell state supplier. | `WindowContentState.empty(mainId, layout())`; no payload. |
-| Floating | One detached area keyed by group id with view ids/active and stage geometry; no profile. | Payload contains `selectedTab` as a string; layout is one group. |
+| Floating | One detached area keyed by group id with view ids/active and stage geometry; profile id comes from `WindowOptions.profile()` when present. | Payload contains `selectedTab` as a string; layout is one group. |
 | Custom | Empty areas, stage geometry, `maximized=false`, profile id from options. | Implemented by product content; the shell does not call it during state capture. |
 
 `WindowContentState` and `ContentState` are different contracts. Neither `DockWindow.state()` nor

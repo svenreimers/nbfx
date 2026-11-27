@@ -20,7 +20,7 @@
 -->
 # 16 — Chrome profiles
 
-**Baseline:** `f2e43e8b58`.
+**Baseline:** `60143d8f59`.
 
 | Area | Status |
 |---|---|
@@ -30,6 +30,7 @@
 | Main-window publication, decoration and profile-aware action reads | **Implemented** |
 | Product policy discovery through `Product`/`ChromeProfilePolicyProvider` | **Implemented** for main-window startup |
 | Optional `WindowState.profileId` persistence | **Implemented** |
+| `WindowOptions.closePolicy` values for floating/custom stages | **Implemented**; lifecycle is covered in [chapter 12](12-floating-and-redocking.md) and [chapter 13](13-main-custom-and-multiwindow-handles.md) |
 | Per-window profile-driven frames for floating/custom windows and restore-time frame selection | **Target only** |
 
 Related chapters: [frame contract](14-shell-provider-and-frame-contract.md),
@@ -277,6 +278,10 @@ Decoration precedence is:
 ### `WindowOptions`
 
 ```java
+public enum WindowClosePolicy {
+    HIDE, REDOCK, CLOSE_CONTENT
+}
+
 public record WindowOptions(
         WindowKind kind,
         ShellChromeProfile profile,
@@ -288,22 +293,36 @@ public record WindowOptions(
         double height,
         boolean resizable,
         boolean rememberBounds,
-        WindowDecoration decoration) {}
+        WindowDecoration decoration,
+        WindowClosePolicy closePolicy) {
+
+    // Source-compatible 11-argument constructor:
+    public WindowOptions(WindowKind kind, ShellChromeProfile profile, String title,
+            ResourceRef icon, Window owner, boolean modal, double width, double height,
+            boolean resizable, boolean rememberBounds, WindowDecoration decoration) {
+        this(kind, profile, title, icon, owner, modal, width, height, resizable,
+                rememberBounds, decoration, WindowClosePolicy.CLOSE_CONTENT);
+    }
+}
 ```
 
-`kind` is nonnull. Width/height must be finite and strictly positive; invalid dimensions throw
-`IllegalArgumentException`. Other fields may be null where their APIs allow it. The record has no
-convenience defaults.
+`kind` and `closePolicy` are nonnull; a null policy throws `NullPointerException`. Width/height must be
+finite and strictly positive. The compatibility constructor defaults to `CLOSE_CONTENT`, not the
+target's floating `REDOCK` default. `closePolicy` controls stage close behavior, not chrome selection,
+and is not persisted in `WindowState` or custom bounds.
 
-For `DockPlacement.FLOAT`, `DefaultWindowManager` currently uses:
+For `DockPlacement.FLOAT`, `DefaultWindowManager` currently uses the 11-argument constructor, so its
+effective options are:
 
 ```java
 new WindowOptions(WindowKind.FLOATING, null, null, null, null,
-        false, 600, 400, true, false, null);
+        false, 600, 400, true, false, null,
+        WindowClosePolicy.CLOSE_CONTENT);
 ```
 
-That default supplies geometry/options, but the window manager does not run `ShellProfileResolver` for
-it.
+That default supplies geometry/options and the legacy close behavior, but the window manager does not
+run `ShellProfileResolver` for it. Re-floating an already floating pane activates the existing handle
+without reapplying newly supplied options or close policy.
 
 ## 16.6 Region/profile intersection
 
@@ -362,7 +381,7 @@ use it to build those windows:
   into chrome;
 - content/group `ShellProfileHint` values are not automatically harvested during float/custom window
   creation;
-- `FloatingWindow.state()` records `profileId = null`;
+- `FloatingWindow.state()` records `options.profile().id()` only when an explicit profile object was supplied; it does not resolve a hint/policy/default;
 - `CustomWindow.state()` records `options.profile().id()` only when an explicit profile object was
   supplied; it does not resolve a hint/policy/default;
 - the current detached IDE chrome is a separate legacy predicate path whose inherited `id()` is
@@ -508,7 +527,7 @@ participate in declarative region/action filtering under id `compact`.
 
 | Condition | Result |
 |---|---|
-| Null `WindowOptions`, null kind or null profile list | `NullPointerException` |
+| Null `WindowOptions`, null kind, null `closePolicy`, or null profile list | `NullPointerException` |
 | Nonpositive/nonfinite width or height | `IllegalArgumentException` |
 | Null element in declared profile list | `NullPointerException` |
 | Duplicate declared profile id | `IllegalArgumentException("Duplicate shell profile id: ...")` |
@@ -543,6 +562,7 @@ participate in declarative region/action filtering under id `compact`.
 | Mandatory named product policy for a present product | **Implemented.** No product uses neutral defaults. |
 | Selected profile published before provider/frame creation | **Implemented** for MAIN. |
 | Native/undecorated applied before showing | **Implemented** for MAIN; explicit options decoration works for floating/custom stages. |
+| `WindowClosePolicy` on floating/custom stages | **Implemented.** MAIN has no policy dispatch/cascade, and close policy is not persisted. |
 | MAIN/FLOATING/CUSTOM each select different chrome | **Target only.** Runtime selection/frame composition is MAIN-only. |
 | Content/group hints automatically choose floating/custom chrome | **Target only.** The hint capability and startup lookup input exist. |
 | Restored `WindowState.profileId` selects the next frame before creation | **Target only.** Only state round-trip exists. |
@@ -563,6 +583,7 @@ participate in declarative region/action filtering under id `compact`.
 - [`ShellProfileResolver`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/ShellProfileResolver.java)
 - [`ShellProfileSelection`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/ShellProfileSelection.java)
 - [`WindowOptions`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowOptions.java)
+- [`WindowClosePolicy`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java)
 - [`WindowState`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowState.java)
 - [`ShellApplication`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ShellApplication.java)
 - [`DefaultWindowManager`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java)
@@ -581,5 +602,6 @@ participate in declarative region/action filtering under id `compact`.
 - [`ShellProfileStartupTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ShellProfileStartupTest.java)
 - [`FxWindowSystemTest`](../../../nbfx-platform/nbfx.platform.workspace/test/unit/src/org/netbeans/modules/nbfx/platform/workspace/FxWindowSystemTest.java)
 - [`CustomWindowTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java)
+- [`DockWindowContractTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) — 11-argument `WindowOptions` defaults to `CLOSE_CONTENT`; null close policy is rejected.
 
 Continue with [chapter 17 — actions, menus, toolbars, and ribbons](17-actions-menus-toolbars-and-ribbons.md).

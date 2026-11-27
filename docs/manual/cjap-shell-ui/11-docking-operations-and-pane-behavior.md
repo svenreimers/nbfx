@@ -20,7 +20,7 @@
 -->
 # 11. Docking operations and pane behavior
 
-**Baseline:** `f2e43e8b58` (C3-2r).
+**Baseline:** `60143d8f59` (C4-3e).
 **Audience:** contributors changing split/move/close behavior or debugging pane lifecycle and slides.
 
 ## 11.1 Status at a glance
@@ -314,12 +314,13 @@ Pointer drags on a detached pane offer tab joining rather than main-area split g
 `TabMover` provides a keyboard alternative from **Move** / **Move Group**:
 
 - Candidates include joining each other pane, splitting beside each pane on four sides, and four whole-area edges when more than one leaf exists.
-- Arrow keys step to the nearest candidate in that direction.
-- Enter confirms; Escape or any mouse press cancels without mutation.
+- Arrow keys step to the nearest candidate in that direction; Enter ends move mode and then performs the chosen move.
+- Escape, any mouse press, loss of window focus, explicit `TabMover.cancelActive()`, or starting another mover all end move mode without moving or selecting content.
+- Ending removes the scene key/mouse filters and window-focus listener, clears the stored window, hides the drop line/frame, and clears the static active mover.
 - A single-tab source excludes splitting beside itself; group moves require a nonempty pane.
 - Moving a detached group into the area extracts its tabs into a new pane and lets the detached window close when empty.
 
-This is a direct `DockArea` path, not a `DockRequest`/policy path.
+This is a direct `DockArea` path, not a `DockRequest`/policy path. `TabMoverTest` covers Escape and explicit cancel only; focus-loss cancellation is implemented but not directly tested there.
 
 ## 11.10 Examples
 
@@ -368,6 +369,7 @@ DockResult result = windows.dock(request);
 - [`WindowManagerTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) — split/edge and unique resulting groups.
 - [`NbfxTabPaneFloatTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/NbfxTabPaneFloatTest.java) — detached pane identity/kind and close preservation.
 - [`AppStateLayoutTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/AppStateLayoutTest.java) — minimized side/size/anchor persistence.
+- [`TabMoverTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/TabMoverTest.java) — Escape and explicit cancel leave the tab in its source pane; no direct focus-loss case.
 - [`TabContextMenu.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/TabContextMenu.java), [`SlidingArea.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/SlidingArea.java), [`TabMover.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/TabMover.java).
 
 ## 11.13 Current versus target

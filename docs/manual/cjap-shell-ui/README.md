@@ -25,7 +25,7 @@ This manual explains the WindowSystem, AppShell, docking, window, and chrome beh
 test authors who need to use or extend the nbfx application framework without importing platform
 implementation types.
 
-**Documentation baseline:** commit `f2e43e8b58` (`C3-2r: persist remembered custom window bounds`).
+**Documentation baseline:** commit `60143d8f59` (`C4-3e: extract testable external drop payload routing`).
 The manual describes that committed branch state. Later or uncommitted work is outside its baseline.
 
 The existing [CJAP target reference](../../reference/cjap-shell-ui.md) describes the intended end state.
@@ -57,6 +57,14 @@ explicitly rather than presenting a planned API as available.
 - The visual shell OVERLAY region is not the target anchored `OverlayHost`/HUD model.
 - JavaFX scene and window mutations belong on the JavaFX Application Thread unless a chapter explicitly
   documents a headless/persistence exception.
+
+## Recent implementation additions
+
+- `WindowClosePolicy` and `WindowOptions.closePolicy` now drive individual floating/custom close behavior.
+- `DockPolicySpec` and `DockPolicy.fromSpec` provide executable declarative policy data in `api.shell`; production wiring is still pending.
+- `DockWindow.show()` now brings the stage to the front and requests focus through `WindowActivation`.
+- `TabMover` cancels an active keyboard move when its window loses focus.
+- `ExternalDrop` and `FileDragAndDrop.localFilesFrom` extract testable external-drop payloads and local files.
 
 ## Quick navigation by task
 

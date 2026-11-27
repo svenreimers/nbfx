@@ -20,7 +20,7 @@
 -->
 # 19. Content, view, and editor lifecycle
 
-This chapter describes the content lifecycle at baseline `f2e43e8b58`. The important distinction is
+This chapter describes the content lifecycle at baseline `60143d8f59`. The important distinction is
 between the **generic content model**, the **per-shell generic manager**, and the older
 **editor-tab manager** that happens to have the same simple class name.
 
@@ -378,8 +378,14 @@ and
 | View tab close | No view confirmation contract; adapter always allows | Shell lifecycle closes `ViewContent`; view releases resources in `viewClosed()`. |
 | Editor tab close | `CloseConfirmation` before removal; adapter then allows | Shell lifecycle unregisters through `EditorContext`, which disposes the document. |
 | Editor close without manager entry | Same tab confirmation if user-initiated | Fallback `EditorContext.unregister`. |
-| Detached window close with tabs still present | Existing detached close behavior | Pane/window cleanup unregisters documents; redock paths preserve content. |
+| Detached window close — `HIDE` | Native/programmatic close is consumed and hides the window | Window, pane, tabs, and content stay live and managed; no generic manager close. |
+| Detached window close — `REDOCK` | Native/programmatic close is consumed | When a home/fallback target exists, tabs move there and detached chrome closes with content preservation; content instances and open registrations are retained. |
+| Detached window close — `CLOSE_CONTENT` | Legacy detached `CloseConfirmation`, then window cleanup | Editor documents are unregistered/disposed through `EditorContext`; this is not a uniform generic `ContentManager.close` pass. |
 | Shell `stop()` | Normal quit confirmation happened earlier, if requested | Listeners are removed; there is no generic close-all pass. |
+
+`WindowClosePolicy` selects the detached-window behavior. `HIDE` and `REDOCK` preserve content;
+`CLOSE_CONTENT` enters the legacy editor/window cleanup path. None of these is a generic manager
+close-all operation.
 
 `CloseConfirmation` offers Save/Discard/Cancel, suppresses Save for locked documents, avoids prompting
 for a modified document when another clone remains open, and aborts close when saving fails. See
@@ -525,7 +531,9 @@ For a view, prefer `ViewProvider` + `ViewManager.show`; for a file editor, prefe
   [`NbfxTabPane`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/NbfxTabPane.java)
   (deferred close and fallbacks)
 - [`ContentManagerService`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ContentManagerService.java),
-  [`DefaultWindowManager`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java)
+  [`DefaultWindowManager`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java),
+  [`FloatingWindow`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java),
+  [`WindowClosePolicy`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java)
 
 ### Tests
 
@@ -536,6 +544,8 @@ For a view, prefer `ViewProvider` + `ViewManager.show`; for a file editor, prefe
   [`EditorContentTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/EditorContentTest.java)
 - [`ViewContentLifecycleTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ViewContentLifecycleTest.java),
   [`EditorContentLifecycleTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/EditorContentLifecycleTest.java)
+- [`WindowManagerTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java)
+  covers floating `HIDE` and `REDOCK` close policies.
 
 ## 19.13 Current vs target
 

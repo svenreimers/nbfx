@@ -20,7 +20,7 @@
 -->
 # 23. Public API catalog
 
-**Baseline:** `f2e43e8b58` on `docs/cjap-shell-ui-manual`.
+**Baseline:** `60143d8f59` on `docs/cjap-shell-ui-manual`.
 **Scope:** the public contracts actually present in this checkout, not the complete CJAP target.
 
 ## 23.1 How to read this catalog
@@ -48,6 +48,8 @@ Two package distinctions matter throughout:
 | Docking request/decision/policy | `org.netbeans.api.nbfx.shell` | `api.docking` |
 | Neutral placement/mode | `org.netbeans.api.nbfx.content` | same |
 | Theme API | token types in `platform.theme`; static `NbfxTheme` | `api.theme` |
+
+**Version note:** the `nbfx.api.shell` manifest is `1.16`; `nbfx.platform.shell` declares an `api.shell` run dependency of `1.15`. `WindowClosePolicy` is `@since 1.15`, and `DockPolicySpec`/`DockPolicy.fromSpec` are `@since 1.16`.
 
 See [current-to-target migration](27-current-to-target-migration.md) for the package moves.
 
@@ -519,7 +521,7 @@ public record DockRequest(
 
 `content`, `placement`, and `mode` are nonnull. Other target/source handles are nullable. Null modifiers become an empty set; otherwise modifiers are copied. The baseline runtime does not interpret `DockModifier` values or enforce copy/move semantics from `mode`.
 
-### `DockDecision`, `DockResult`, `DockPolicy` — Implemented
+### `DockDecision`, `DockResult`, `DockPolicy`, `DockPolicySpec` — Implemented
 
 ```java
 public record DockDecision(boolean allowed, DockPlacement placement, String reasonKey) {
@@ -535,14 +537,41 @@ public record DockResult(DockDecision decision, DockGroupId group) {
 @FunctionalInterface
 public interface DockPolicy {
     DockDecision evaluate(DockRequest request);
+    static DockPolicy fromSpec(DockPolicySpec spec,
+            Function<ContentId, Optional<ContentKind>> contentKinds,
+            Function<DockGroupId, Optional<PaneRole>> groupAreas);
     static DockPolicy allOf(DockPolicy... policies);
     static DockPolicy anyOf(DockPolicy... policies);
+}
+
+public record DockPolicySpec(
+        Set<ContentKind> acceptedKinds,
+        Set<PaneRole> acceptedAreas,
+        Set<DockPlacement> placements,
+        Set<TransferMode> modes,
+        boolean allowCrossArea,
+        boolean allowFloat) {
+    public static DockPolicySpec allowAll();
 }
 ```
 
 A rejection requires a nonblank reason key. Acceptance normalizes a null reason to empty. An accepted result requires a target group. `allOf` returns the first rejection or the last allowance; `anyOf` returns the first allowance or first rejection, and `dock.policy.none` for an empty composition.
 
-The runtime consults global-lookup policies in order, skips null policies/decisions defensively, stops at the first rejection, and revalidates structure after placement refinement.
+The runtime consults global-lookup `DockPolicy` services in order, skips null policies/decisions defensively, stops at the first rejection, and revalidates structure after placement refinement.
+
+`DockPolicySpec` defensively copies all four sets. Empty sets mean unrestricted, and `allowAll()` returns empty sets with both booleans true. `DockPolicy.fromSpec` evaluates in this order:
+
+1. content kind → `dock.policy.kind`;
+2. target area → `dock.policy.area`;
+3. placement → `dock.policy.placement`;
+4. transfer mode → `dock.policy.mode`;
+5. cross-area movement → `dock.policy.cross-area`;
+6. FLOAT/NEW_WINDOW permission → `dock.policy.float`;
+7. otherwise allow the requested placement.
+
+The target area is the explicit `request.targetArea()`, or the area resolved from `targetGroup`. Unknown content identity rejects only when `acceptedKinds` is nonempty; unknown target area skips the area restriction; unknown source area skips the cross-area restriction. A null resolver result is treated as empty. `WindowManager` structural validation remains authoritative for missing identities.
+
+`DockPolicySpec` and `fromSpec` are pure API and unit-tested, but no production code constructs them yet. Production resolver wiring and pointer-drag policy integration remain target-only; existing programmatic `DockPolicy` services are still consulted by `WindowManager`.
 
 ### Placements and modifiers — Implemented vocabulary, Partial execution
 
@@ -554,7 +583,7 @@ The runtime consults global-lookup policies in order, skips null policies/decisi
 
 Complete reason keys are in [errors and troubleshooting](25-errors-and-troubleshooting.md#252-docking-reason-keys).
 
-Sources: [`WindowManager.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowManager.java), [`DockRequest.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockRequest.java), [`DockDecision.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockDecision.java), [`DockResult.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockResult.java), [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java), [`DockPlacement.java`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/api/nbfx/content/DockPlacement.java), [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java).
+Sources: [`WindowManager.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowManager.java), [`DockRequest.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockRequest.java), [`DockDecision.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockDecision.java), [`DockResult.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockResult.java), [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java), [`DockPolicySpec.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicySpec.java), [`DockPlacement.java`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/api/nbfx/content/DockPlacement.java), [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java).
 
 ## 23.7 Window handles, options, and content
 
@@ -576,7 +605,21 @@ public enum WindowKind { MAIN, FLOATING, CUSTOM }
 public enum WindowDecoration { NATIVE, UNDECORATED }
 ```
 
-### `WindowOptions` — Implemented, no convenience constructor
+### `WindowClosePolicy` — Implemented, `@since 1.15`
+
+```java
+public enum WindowClosePolicy {
+    HIDE,
+    REDOCK,
+    CLOSE_CONTENT
+}
+```
+
+- `HIDE` hides the window while keeping its content live and managed.
+- `REDOCK` returns floating content to the main window; it is invalid for custom product windows.
+- `CLOSE_CONTENT` uses the normal close lifecycle. It is the actual baseline default.
+
+### `WindowOptions` — Implemented, 12-component record plus compatibility constructor
 
 ```java
 public record WindowOptions(
@@ -590,14 +633,22 @@ public record WindowOptions(
         double height,
         boolean resizable,
         boolean rememberBounds,
-        WindowDecoration decoration)
+        WindowDecoration decoration,
+        WindowClosePolicy closePolicy) {
+
+    public WindowOptions(WindowKind kind, ShellChromeProfile profile, String title,
+            ResourceRef icon, Window owner, boolean modal, double width, double height,
+            boolean resizable, boolean rememberBounds, WindowDecoration decoration);
+}
 ```
 
-- `kind` is nonnull.
+- `kind` and `closePolicy` are nonnull. A null `closePolicy` throws `NullPointerException("closePolicy")`.
 - Width/height must be finite and strictly positive.
 - Profile, title, icon, owner, and decoration are nullable.
 - There are no record-level defaults for modality, resizability, or bounds persistence. Callers must supply every component.
-- The runtime's internal default floating options are `FLOATING`, null profile/title/icon/owner/decoration, nonmodal, `600×400`, resizable, `rememberBounds=false`.
+- The 11-argument compatibility constructor supplies `WindowClosePolicy.CLOSE_CONTENT`.
+- The runtime's internal default floating options use that compatibility constructor: `FLOATING`, null profile/title/icon/owner/decoration, nonmodal, `600×400`, resizable, `rememberBounds=false`, and therefore `CLOSE_CONTENT`.
+- The API change is source-compatible through the overload but is declared binary-incompatible in `apichanges.xml`; downstream binaries should be recompiled and signature baselines reset with the domain change.
 
 ### `DockWindow` — Implemented, Partial state semantics
 
@@ -616,7 +667,9 @@ public interface DockWindow {
 ```
 
 - `layout()` is nullable for custom content without a layout.
-- `hide()` preserves content and handle liveness. Floating/custom `close()` runs cleanup and prevents re-showing; `MainDockWindow.close()` merely calls `stage.close()`, and its `show()` can be called again.
+- `show()` calls `WindowActivation.show`: `stage.show()`, `stage.toFront()`, then `stage.requestFocus()` for main, floating, and custom handles.
+- `hide()` preserves content and handle liveness.
+- `close()` is policy-dependent for floating/custom windows: `HIDE` leaves the handle live and re-showable; `REDOCK` moves floating tabs to their home or main fallback and closes the window, while custom `REDOCK` is rejected at creation; `CLOSE_CONTENT` closes through the applicable lifecycle. `MainDockWindow.close()` remains a plain `stage.close()`.
 - The current `state()` is a legacy view/geometry snapshot, not the target complete per-window state.
 - The main handle id is `nbfx:window.main`; floating ids derive from the group id.
 
@@ -636,11 +689,13 @@ public interface WindowContent extends AutoCloseable {
 ### Current window ownership
 
 - Floating windows preserve pane/content identity across show/hide/redock.
-- Custom windows call `WindowContent.close()` exactly once and remove themselves from enumeration.
+- `HIDE` keeps floating/custom handles enumerated and content live; a later `show()` reactivates them.
+- `CLOSE_CONTENT` custom close calls `WindowContent.close()` exactly once and removes the window from enumeration. Floating `CLOSE_CONTENT` uses the existing editor/view close lifecycle.
+- `REDOCK` close is implemented only for floating windows and does not use `WindowManager.redock(DockRequest)`; it precomputes each tab's home or main fallback.
 - `rememberBounds` is honored for custom windows through `AppState`; floating windows continue to use detached-pane layout persistence.
 - A custom window's `WindowOptions.profile` is retained for `state().profileId()` but is **not** used to build profile-driven chrome.
 
-Sources: [`WindowId.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowId.java), [`WindowOptions.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowOptions.java), [`DockWindow.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockWindow.java), [`WindowContent.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContent.java), [`FloatingWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java), [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java), [`MainDockWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/MainDockWindow.java).
+Sources: [`WindowId.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowId.java), [`WindowOptions.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowOptions.java), [`WindowClosePolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java), [`DockWindow.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockWindow.java), [`WindowContent.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowContent.java), [`WindowActivation.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java), [`FloatingWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java), [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java), [`MainDockWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/MainDockWindow.java).
 
 ## 23.8 Content and drop APIs
 
@@ -757,6 +812,8 @@ public interface DropHandler {
 
 `DropRouter` is an internal `platform.content` utility, not public API. It discovers global services plus `NbFx/DropHandlers`, tries caller-ordered targets, and retains the first rejection when nothing accepts. Although `DropRequest.location` is nullable for a future keyboard transfer, both `DropRouter.resolve` and `resolveDetailed` currently require a nonnull location. The shell's tab-pane integration tries content (when under a tab), group, then area. It does not supply overlay/window/global targets or an explicit Escape-cancel path.
 
+The JavaFX-event adapter is also internal: [`ExternalDrop.from(TabPane, DragEvent)`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ExternalDrop.java) captures a neutral payload record, while [`FileDragAndDrop.localFilesFrom(Dragboard)`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FileDragAndDrop.java) parses either the private newline-separated `application/x-nbfx-files` format or standard dragboard files. `NbfxTabPane.routeExternalDrop` consumes that record; none of these implementation types is public API.
+
 Sources: [`Content.java`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/api/nbfx/content/Content.java), [`ContentManager.java`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/api/nbfx/content/ContentManager.java), [`ContentFactory.java`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/api/nbfx/content/ContentFactory.java), [`DefaultContentManager.java`](../../../nbfx-platform/nbfx.platform.content/src/org/netbeans/modules/nbfx/platform/content/DefaultContentManager.java), [`ContentStateStore.java`](../../../nbfx-platform/nbfx.platform.content/src/org/netbeans/modules/nbfx/platform/content/ContentStateStore.java), [`DropHandler.java`](../../../nbfx-platform/nbfx.api.content/src/org/netbeans/api/nbfx/content/DropHandler.java), [`DropRouter.java`](../../../nbfx-platform/nbfx.platform.content/src/org/netbeans/modules/nbfx/platform/content/DropRouter.java).
 
 ## 23.9 Adjacent public contracts used by the shell
@@ -823,11 +880,10 @@ The public token types are `ThemeToken`, `ThemeTokenProvider`, `ThemeTokenRegist
 Do not compile against or document these as available in this baseline:
 
 - `ShellRuntime`
-- public `org.netbeans.api.nbfx.docking.*` (`DockHost`, `DockPolicySpec`, target module placement)
+- the public `org.netbeans.api.nbfx.docking` module/package. `DockPolicySpec` already exists in `api.shell`; the target public `DockHost` contract does not.
 - public `org.netbeans.api.nbfx.theme.ThemeManager`, `Theme`, `ThemeTokens`, `ThemeScope`, `HostTheme`, `ThemePolicy`
 - `SessionState`
 - `WindowStateStore`
-- `WindowClosePolicy` — **no such type exists in this baseline**
 - `FocusController`
 - `OverlayHost`, `OverlaySpec`, `OverlayAnchor`, `OverlayInputMode`, `OverlayContent`
 - `ShellFrame.overlays()`

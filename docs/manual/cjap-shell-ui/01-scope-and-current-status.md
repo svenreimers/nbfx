@@ -23,7 +23,7 @@
 ## What this manual describes
 
 This manual describes the CJAP shell/UI code at documentation baseline commit
-`f2e43e8b58` (`C3-2r: persist remembered custom window bounds`). It covers the implemented
+`60143d8f59` (`C4-3e: extract testable external drop payload routing`). It covers the implemented
 application shell, `WindowSystem`, docking/window handles, shell frames and chrome, content
 lifecycle, and the persistence paths that actually run at this baseline.
 
@@ -98,7 +98,13 @@ uncommitted work are outside this baseline.
 | Content-state integration with session restore | **Partial** | The store is not connected to shell capture, shutdown, content factories, or layout restoration. |
 | `SessionState` and `WindowStateStore` | **Target only** | Neither public type exists. `WindowSystem` has no public `snapshot()` or `defaultState()`. |
 | Coordinated shutdown | **Partial** | Confirmation, ordered participants, asynchronous cleanup, timeout, and `stop()` fallback exist; no direct shutdown unit/integration test was found. |
-| Focus controller and multi-window close policy | **Target only** | The baseline has focus bridges and window handles, not the target `FocusController` or explicit `REDOCK`/`CLOSE_CONTENT`/`HIDE` policy model. |
+| `WindowClosePolicy` API and floating close dispatch | **Implemented** | `HIDE`, `REDOCK`, and `CLOSE_CONTENT` are public; floating handles and native close requests dispatch them, with hide/redock tests. |
+| Custom-window close dispatch | **Partial** | `HIDE` and `CLOSE_CONTENT` are implemented and tested; `REDOCK` is rejected for custom windows. |
+| `DockPolicySpec` / `DockPolicy.fromSpec` | **Implemented** | Immutable declarative policy data and an executable adapter exist in `api.shell`; production code does not yet construct/wire them. |
+| `DockWindow.show()` activation | **Implemented** | Main, floating, and custom handles use `WindowActivation` to show, front, and request focus. |
+| `ExternalDrop` / `localFilesFrom` | **Implemented** | Drag payloads and local files are adapted into a testable routing record; routing tests cover files, URIs, text, nodes, priority, and exclusions. |
+| `TabMover` focus-loss cancellation | **Implemented** | The keyboard move ends and removes its filters/listener when the owning window loses focus. |
+| `FocusController`, owner-close propagation, and unified multi-window close policy | **Target only** | Individual handle policies exist, but there is no target focus controller, owner-window policy propagation, or unified multi-window shutdown state machine. |
 | Anchored HUD `OverlayHost` | **Target only** | The visual shell `OVERLAY` region exists, but it is not the target anchored overlay model. |
 | Target theme/design/plugin module split | **Target only** | Current theme and shell implementation modules do not match the target `api.theme`, `platform.design`, `api.plugins`, and `platform.shell.default` map. |
 
@@ -137,6 +143,13 @@ uncommitted work are outside this baseline.
 - [Custom shell/rollback tests](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomShellProviderTest.java)
 - [Remembered custom bounds tests](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java)
 - [ContentStateStore tests](../../../nbfx-platform/nbfx.platform.content/test/unit/src/org/netbeans/modules/nbfx/platform/content/ContentStateStoreTest.java)
+- [WindowClosePolicy.java](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java)
+- [DockPolicySpec.java](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicySpec.java)
+- [WindowActivation.java](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java)
+- [ExternalDrop.java](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/ExternalDrop.java)
+- [ExternalDropRoutingTest.java](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ExternalDropRoutingTest.java)
+- [WindowManagerTest.java](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java)
+- [DockPolicyTest.java](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockPolicyTest.java)
 
 ## Current versus target
 

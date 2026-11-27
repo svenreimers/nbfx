@@ -20,7 +20,7 @@
 -->
 # 27. Current-to-target migration
 
-**Baseline:** `f2e43e8b58`.
+**Baseline:** `60143d8f59`.
 **Target sources:** [ADR 0001](../../architecture/adr-0001-cjap-shell-ui.md), [CJAP target reference](../../reference/cjap-shell-ui.md), and [implementation plan](../../plan/cjap-shell-ui-implementation.md).
 
 The ADR deliberately accepts nbfx-owned public API breaks. Old APIs are deleted after consumer migration, not deprecated forever. Persisted session formats are the exception: migrate them once, retain a backup, and provide deterministic fallback.
@@ -39,15 +39,15 @@ The ADR deliberately accepts nbfx-owned public API breaks. Old APIs are deleted 
 | Actions | Registration/reference reuse, context/profile filters, owned scoped commands | **Implemented** | Unified target action package/module; remove provider and editor-specific fallback APIs |
 | Layout model | Pure `LayoutSpec`, builder, XML, annotations, validation/normalization | **Implemented** | Keep pure model; make it the runtime's actual composition input |
 | Live layout input | `WindowPanes`, `ViewAreas`, `WindowLayouts`, `DockTree`, `WindowComposition` | **Legacy** | `LayoutSpec` → `ViewArea` → `DockGroupSpec` → hosts/content |
-| Docking contracts | `DockRequest`/`DockDecision`/`DockPolicy` in `api.shell`; `DockPlacement` in `api.content`; implementation `DockHost` in workspace | **Partial** | Public `api.docking` owns host/policy/request/decision contracts |
+| Docking contracts | `DockRequest`/`DockDecision`/`DockPolicy`/`DockPolicySpec` in `api.shell`; `DockPlacement` in `api.content`; implementation `DockHost` in workspace | **Partial** | Move the existing contracts to `api.docking`, then add production `DockPolicySpec` resolver wiring and pointer integration |
 | WindowManager | Content/group operations, split/edge/FLOAT, float/redock, custom windows | **Partial** | Same public surface over generic `Content` and all window kinds; remove tab-specific resolution |
 | Generic content | `Content`, factory/state/requirements, per-shell manager, view/editor adapters | **Partial** | Arbitrary content docks/floats/redocks without view/editor tab assumptions |
 | Content persistence | `ContentStateStore` implemented and tested, not wired to shell | **Partial** | Store owns only opaque payloads keyed by id/instance key; window store owns order/placement |
 | Window/session persistence | `WindowState`/`AreaState` + `ViewStateStore`; separate `AppState`/`SessionRestorer` | **Legacy** | `WindowStateStore` owns `SessionState`; one-window `WindowState`; one-time migration/backup/fallback |
 | Windows | Main/floating/custom handles; hide/close; custom bounds | **Partial** | Full geometry/owner/modality/profile/decoration/state restore and close propagation |
-| Close policy | Normal editor/view close confirmation; no `WindowClosePolicy` type | **Target only** | Explicit `REDOCK`, `CLOSE_CONTENT`, `HIDE`; default floating `REDOCK`; owner-window propagation |
-| Focus | Active-component/global-context bridges and tab focus behavior | **Partial** | `FocusController` separates OS activation, logical selection, keyboard focus and restores deterministically |
-| Drop | Neutral contracts, layer registration, content/group/area routing, legacy file fallback | **Partial** | Full target routing order, global fallback, Escape cancel, authoritative decision, keyboard equivalents |
+| Close policy | `WindowClosePolicy` HIDE/REDOCK/CLOSE_CONTENT; 11-argument/default `CLOSE_CONTENT`; floating/custom behavior implemented | **Partial** | Target default floating `REDOCK`, owner-window propagation, complete veto behavior, and policy persistence |
+| Focus | `WindowActivation.show` does show/toFront/requestFocus; `TabMover` cancels on window focus loss; active-component bridges remain | **Partial** | `FocusController` separates OS activation, logical selection, keyboard focus and restores deterministically |
+| Drop | Neutral contracts, layer registration, content/group/area routing, `ExternalDrop` payload extraction, legacy file fallback | **Partial** | Full target routing order, global fallback, Escape cancel, authoritative decision, keyboard equivalents, real Dragboard/e2e coverage |
 | Theme | Token API in `platform.theme`; static `NbfxTheme` | **Legacy** | `api.theme.ThemeManager`, `Theme`, `ThemeTokens`, `ThemeScope`, `HostTheme`, policy; delete static public state |
 | Status | Window status bar with left/fill/right registrations | **Partial** | `StatusScope.WINDOW/AREA/GROUP/CONTENT` and multiple hosts |
 | Overlays | Visual shell OVERLAY region and slide/progress overlays | **Partial** | Distinct `OverlayHost`/`OverlaySpec` anchored HUD model plus `ShellFrame.overlays()` |
@@ -65,7 +65,7 @@ flowchart TD
     B --> C[2. Move contracts to api.docking/api.theme<br/>and acyclic target module graph]
     C --> D[3. Adopt LayoutSpec in DockRuntime<br/>and introduce generic Content hosts]
     D --> E[4. Add WindowStateStore/SessionState<br/>wire ContentStateStore; migrate old state once]
-    E --> F[5. Complete MAIN/FLOATING/CUSTOM windows<br/>per-window profiles + WindowClosePolicy + FocusController]
+    E --> F[5. Complete MAIN/FLOATING/CUSTOM windows<br/>per-window profiles + close-policy completion + FocusController]
     F --> G[6. Add OverlayHost and ShellFrame.overlays<br/>anchor/input/focus/theme lifecycle]
     G --> H[7. Migrate IDE and downstream consumers<br/>to API/SPI only]
     H --> I[8. Delete Legacy APIs and static facades<br/>reset API baselines; freeze target]
@@ -100,17 +100,19 @@ No product or API module needs a static UI singleton to obtain its runtime. Exis
 
 ### Current blockers
 
-- There is no `nbfx.api.docking` module. Docking policy/request/decision types live in `api.shell`; placement/mode live in `api.content`; an incompatible internal `DockHost` lives in `platform.workspace`.
+- There is no `nbfx.api.docking` module. `DockRequest`, `DockDecision`, `DockPolicy`, and the already-implemented `DockPolicySpec` live in `api.shell`; placement/mode live in `api.content`; an incompatible internal `DockHost` lives in `platform.workspace`.
+- `DockPolicy.fromSpec` is pure and unit-tested only. Production content-kind/group-area resolvers and pointer-drag integration are not wired.
 - There is no `nbfx.api.theme` module. Public token types and static `NbfxTheme` live in `platform.theme`.
 - `api.layout` is already JavaFX-free and should remain M-tier.
 
 ### Work
 
 1. Create target API modules with explicit public packages and dependency direction from the ADR.
-2. Move `DockHost`, `DockPolicySpec`, `DockRequest`, `DockDecision`, and executable `DockPolicy` to `api.docking`; keep `DockPlacement`/`TransferMode` in `api.content`.
-3. Move theme contracts and implementation behind `api.theme`; introduce `ThemeManager` before removing static state.
-4. Update shell/content/layout signatures and consumers in the same coordinated domain change; do not add permanent public compatibility adapters.
-5. Add API-only downstream fixture compilation and layer/API guards for the new graph.
+2. Move the existing `DockPolicySpec`, `DockRequest`, `DockDecision`, and executable `DockPolicy` to `api.docking`, together with the target public `DockHost`; keep `DockPlacement`/`TransferMode` in `api.content`. Do not invent a second spec type.
+3. Wire `DockPolicy.fromSpec` to production content-kind/group-area resolvers and pointer docking only when that integration slice lands; the factory itself already exists.
+4. Move theme contracts and implementation behind `api.theme`; introduce `ThemeManager` before removing static state.
+5. Update shell/content/layout signatures and consumers in the same coordinated domain change; do not add permanent public compatibility adapters.
+6. Add API-only downstream fixture compilation and layer/API guards for the new graph.
 
 ### Exit gate
 
@@ -169,17 +171,19 @@ New state round-trips without JavaFX types; old fixture migrates once with backu
 - Main-window profile selection occurs before frame creation; floating/custom windows do not build declarative profile frames.
 - `WindowOptions.profile` on custom windows is only echoed into `state().profileId()`.
 - Floating chrome comes from legacy `DetachedBarsProvider`/window environment.
-- No `WindowClosePolicy` or `FocusController` exists.
-- Main close uses shutdown coordination; floating close uses editor confirmation and unregister behavior; custom close disposes host content.
+- `WindowClosePolicy` now exists, but the 11-argument constructor and internal floating default select `CLOSE_CONTENT`, not the target default `REDOCK`.
+- `HIDE` works for floating/custom windows; floating `REDOCK` uses home/main fallback; custom `REDOCK` is intentionally invalid. Owner-window propagation and policy persistence are absent.
+- Close veto behavior is incomplete: custom `CLOSE_CONTENT` directly disposes `WindowContent`, and floating `REDOCK` bypasses normal close confirmation.
+- `WindowActivation.show` and `TabMover` focus-loss cancellation exist, but there is no `FocusController`.
 
 ### Work
 
 1. Resolve profile/decoration for every `WindowKind` using explicit options, content/group hint, product default, policy fallback, and neutral fallback.
 2. Build a per-window `ShellContext`, region host, frame, and theme attachment before showing each window.
 3. Restore persisted profile id before frame creation, not after the window exists.
-4. Add `WindowClosePolicy.REDOCK`, `CLOSE_CONTENT`, and `HIDE`; default floating policy is `REDOCK`.
-5. Apply owner-window close policy to owned floating/custom windows and honor dirty-content vetoes.
-6. Add `FocusController` with independent OS-window activation, logical active group/content, and keyboard focus.
+4. Align the default floating close policy with target `REDOCK` at the coordinated behavior cutover, while retaining explicit `HIDE`/`CLOSE_CONTENT`.
+5. Apply owner-window close policy to owned floating/custom windows, complete dirty-content veto behavior, and persist the selected policy.
+6. Add `FocusController` with independent OS-window activation, logical active group/content, and keyboard focus; reuse `WindowActivation`/`TabMover` behavior rather than duplicating it.
 7. Restore focus/action context after float, redock, close, and overlay dismissal; menus use a context snapshot.
 
 ### Exit gate

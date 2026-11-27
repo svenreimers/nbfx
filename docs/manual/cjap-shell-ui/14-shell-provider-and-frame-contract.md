@@ -20,7 +20,7 @@
 -->
 # 14 — ShellProvider and the ShellFrame contract
 
-**Baseline:** `f2e43e8b58`. This chapter describes the committed implementation, not the complete CJAP target.
+**Baseline:** `60143d8f59`. This chapter describes the committed implementation, not the complete CJAP target.
 
 | Area | Status |
 |---|---|

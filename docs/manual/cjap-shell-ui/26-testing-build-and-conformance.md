@@ -20,7 +20,7 @@
 -->
 # 26. Testing, build, and conformance
 
-**Baseline:** `f2e43e8b58`.
+**Baseline:** `60143d8f59`.
 This chapter inventories the tests and build targets that exist in the checkout. No fresh test pass counts are claimed; the documentation work did not execute the Ant build.
 
 ## 26.1 Headless JavaFX support
@@ -110,7 +110,7 @@ Source: [`AppShellConformanceTest.java`](../../../nbfx-platform/nbfx.platform.sh
 | `actionRegistryWorksWithoutIdeModules` | A programmatically registered `RunnableCommand` resolves and runs without IDE modules |
 | `propertySheetOutputProgressAndWizardsWork` | Properties provider contract works; Properties view is registered; output console and wizard registry/displayer exist. The body does not contain a separate progress-behavior assertion despite the method name. |
 
-`@After` hides all windows. The fixture is stronger than a normal module test because it asserts a classpath boundary, but it is not a full CJAP target conformance suite: it does not exercise `LayoutSpec` runtime construction, `SessionState`, `WindowClosePolicy`, `FocusController`, `OverlayHost`, arbitrary content docking, or per-window profile frames.
+`@After` hides all windows. The fixture is stronger than a normal module test because it asserts a classpath boundary, but it is not a full CJAP target conformance suite: it does not exercise `LayoutSpec` runtime construction, `SessionState`, `WindowClosePolicy`, `DockPolicySpec` production wiring, `WindowActivation`, external-drop payload extraction, `TabMover` focus-loss cancellation, `FocusController`, `OverlayHost`, arbitrary content docking, or per-window profile frames.
 
 Related guard: [`PlatformDeliveryGuard.java`](../../../nbfx-tests/tools/PlatformDeliveryGuard.java) rejects `nbfx-ide`/`nbfx-java` cluster selections and jar-name prefixes in the platform cluster and requires the shell jar. It is a configuration/packaging check, not a recursive class dependency analysis.
 
@@ -165,7 +165,7 @@ flowchart LR
     G --> CF
 ```
 
-Dashed/target-only behaviors have no baseline test node: `ShellRuntime`, target `api.docking`/`api.theme`, live `LayoutSpec` adoption, `SessionState`/`WindowStateStore`, per-window chrome frames, `WindowClosePolicy`, `FocusController`, and `OverlayHost`.
+Target-only or still-unwired behaviors have no complete baseline test node: `ShellRuntime`, target `api.docking`/`api.theme`, live `LayoutSpec` adoption, `SessionState`/`WindowStateStore`, per-window chrome frames, owner-window close propagation, complete close-policy veto/persistence, production `DockPolicySpec` resolver/pointer integration, `FocusController`, and `OverlayHost`. `WindowClosePolicy` itself now has unit coverage.
 
 ## 26.5 Real unit tests and what they prove
 
@@ -183,8 +183,8 @@ Paths below are under each module's `test/unit/src`. Support classes such as `Sh
 | [`ShellRegionRegistryTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/ShellRegionRegistryTest.java) | Direct-folder discovery, profile filtering, duplicate canonical id handling |
 | [`ShellContributionRegistryTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/ShellContributionRegistryTest.java) | Metadata-only discovery, fresh filtered instances, malformed/nested/wrong-type skips |
 | [`ShellFrameApiTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/ShellFrameApiTest.java) | Legacy profile defaults, stable id override, required region context, optional renderer disposal |
-| [`DockPolicyTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockPolicyTest.java) | `allOf`/`anyOf` ordering, short-circuiting, placement refinement, empty-policy reason |
-| [`DockWindowContractTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) | Window id canonical form/namespace requirement, opaque content-state copy |
+| [`DockPolicyTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockPolicyTest.java) | `allOf`/`anyOf` ordering, short-circuiting, placement refinement, empty-policy reason, `DockPolicySpec` kind/area/placement/mode/cross-area/float gates, defensive set copies |
+| [`DockWindowContractTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockWindowContractTest.java) | Window id canonical form/namespace requirement, 11-argument `WindowOptions` default `CLOSE_CONTENT`, null close-policy rejection, opaque content-state copy |
 | [`PaneRoleTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/PaneRoleTest.java) | Legacy role canonicality, word validation, MAIN editor kind, product-role equality |
 | [`ShellRegionRegistrationProcessorTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/ShellRegionRegistrationProcessorTest.java) | Region metadata generation/equality, repeatable container, product kinds, invalid/duplicate rejection, service discovery |
 | [`ShellContributionRegistrationProcessorTest`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/ShellContributionRegistrationProcessorTest.java) | Direct instance generation, DOCK rejection, profile/constructor/type/duplicate checks, service discovery |
@@ -234,8 +234,11 @@ Paths below are under each module's `test/unit/src`. Support classes such as `Sh
 
 | Test file | Proven behavior |
 |---|---|
-| [`WindowManagerTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) | Group/content operations, unique group ids, close lifecycle, policy rejection, into/before/after/split/edge/FLOAT, float/redock, hide/show/close, window enumeration |
-| [`CustomWindowTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java) | Custom create/enumerate/close and remembered bounds across managers |
+| [`WindowManagerTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) | Group/content operations, unique group ids, close lifecycle, policy rejection, into/before/after/split/edge/FLOAT, float/redock, hide/show/close, window enumeration, native floating close with `HIDE` and `REDOCK` |
+| [`CustomWindowTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomWindowTest.java) | Custom create/enumerate/close, `HIDE` close remaining managed, custom `REDOCK` rejection, remembered bounds across managers |
+| [`TabMoverTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/TabMoverTest.java) | Escape and explicit `cancelActive()` end keyboard move mode without changing the tab's pane |
+| [`WindowActivationTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowActivationTest.java) | `WindowActivation.show` shows the stage and calls `toFront()`; it does not assert `requestFocus()` |
+| [`ExternalDropRoutingTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ExternalDropRoutingTest.java) | Neutral `ExternalDrop` records route FILES/URIS/TEXT/NODES, preserve source priority/rejection, and ignore tab drags/navigator-owned targets |
 | [`ShellRegionHostImplTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ShellRegionHostImplTest.java) | Stable wrappers, update/dispose, null/parented/failing contribution isolation, DOCK ownership, profile intersection, FX guard, duplicate roots/kind changes, overlay bounds/a11y, scoped actions, default-frame arrangement |
 | [`CustomShellProviderTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/CustomShellProviderTest.java) | Runtime host/default services, duplicate-provider failure, omitted/raw DOCK rollback |
 | [`ShellProfileStartupTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/ShellProfileStartupTest.java) | Product profile published before provider creation |
@@ -346,11 +349,15 @@ The baseline tests do **not** establish the following target behaviors:
 - Live dock construction from `LayoutSpec`, standalone area/group catalogs, or layout XML.
 - `SessionState`, `WindowStateStore`, one-time old-session migration with backup, or production `ContentStateStore` wiring.
 - Complete MAIN/FLOATING/CUSTOM per-window profile/frame/decoration restore.
-- `WindowClosePolicy` (`REDOCK`, `CLOSE_CONTENT`, `HIDE`) or owner-window close propagation.
+- `WindowClosePolicy` exists and has unit coverage, but owner-window close propagation, complete dirty-content veto behavior, close-policy persistence, and the target default floating `REDOCK` remain incomplete. The actual 11-argument/default policy is `CLOSE_CONTENT`.
+- Close-policy edge cases not proved by tests: native custom-window close/programmatic-close races, multi-tab `REDOCK` with mixed home targets, missing-home/main fallback behavior, and the silent no-destination path.
+- `WindowActivation.show` calls `requestFocus()` in source, but `WindowActivationTest` proves only show/`toFront`; actual OS focus acquisition is not established. `TabMover` listens for window focus loss, but `TabMoverTest` proves only Escape/explicit cancellation, not real focus-loss delivery.
+- `ExternalDropRoutingTest` constructs neutral records directly. It does not prove `ExternalDrop.from(DragEvent)`, real `Dragboard` behavior, private `application/x-nbfx-files` precedence or returned-list immutability in `FileDragAndDrop.localFilesFrom`, whitespace-only TEXT, a tab drag carrying title TEXT, an earlier synthetic `drop.no-handler` masking a later real rejection, discovery order, or end-to-end JavaFX drag/drop.
+- Production `DockPolicySpec` resolver wiring and pointer-drag policy integration.
 - `FocusController` and three-fact focus/context restoration.
 - `OverlayHost`, anchored HUD lifecycle, pass-through/HUD/interactive input rules, or `ShellFrame.overlays()`.
 - Arbitrary `Content` docking independent of view/editor tab adapters.
-- Full drop routing order, global fallback wiring, Escape cancel, or handler exception containment.
+- Production target ordering and end-to-end drop routing, global fallback wiring, Escape cancel, or handler exception containment. Source priority is covered by `ExternalDropRoutingTest`, and target priority by `DropRouterTest`.
 - Target `ThemeManager`/`ThemeScope` behavior across detached/dialog/popup/scoped content.
 - Target status scopes beyond the window status bar.
 - Target node model/NodeView, workspace/settings/diagnostics/plugin lifecycle.

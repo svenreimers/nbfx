@@ -339,10 +339,13 @@ Related tested pieces include:
 
 ## Current versus target
 
-The target `WindowClosePolicy` (`REDOCK`, `CLOSE_CONTENT`, `HIDE`) and owner-window propagation
-are not implemented as a public policy API. The current shell has a main-stage close handler,
-floating/custom handle close behavior, and a generic participant coordinator, but no unified
-multi-window shutdown state machine.
+[`WindowClosePolicy`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java)
+(`REDOCK`, `CLOSE_CONTENT`, `HIDE`) and individual floating/custom close handling now exist.
+Floating handles dispatch all three policies; custom handles implement `HIDE`/`CLOSE_CONTENT` and
+reject `REDOCK`. This does not yet propagate an owner window's policy to owned windows or provide a
+unified multi-window shutdown state machine. `requestQuit()` still handles the main stage, and
+`stop()` still does not enumerate `WindowManager.windows()` to apply every handle's policy. Those
+owner-close propagation and unified multi-window shutdown contracts remain **Target only**.
 
 Continue with [startup](04-appshell-startup.md),
 [WindowSystem lifecycle](06-window-system-lifecycle.md), and

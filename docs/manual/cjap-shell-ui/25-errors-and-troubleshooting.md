@@ -20,7 +20,7 @@
 -->
 # 25. Errors and troubleshooting
 
-**Baseline:** `f2e43e8b58`.
+**Baseline:** `60143d8f59`.
 This chapter separates returned reason keys, thrown exceptions, logged-and-skipped metadata, and persistence fallback. Those are different failure contracts.
 
 ## 25.1 Diagnosis flow
@@ -65,6 +65,21 @@ There is no baseline public `DiagnosticsService`. Diagnostics are Java `java.uti
 |---|---|
 | `dock.policy.none` | `DockPolicy.anyOf()` is composed with zero policies |
 
+### `DockPolicySpec` / `DockPolicy.fromSpec` keys
+
+| Key | Emitted when |
+|---|---|
+| `dock.policy.kind` | `acceptedKinds` is nonempty and the resolved content kind is unknown or not accepted |
+| `dock.policy.area` | The resolved target area is known and not in nonempty `acceptedAreas` |
+| `dock.policy.placement` | The requested placement is not in nonempty `placements` |
+| `dock.policy.mode` | The requested transfer mode is not in nonempty `modes` |
+| `dock.policy.cross-area` | `allowCrossArea=false` and known source/target areas differ |
+| `dock.policy.float` | `allowFloat=false` and placement is `FLOAT` or `NEW_WINDOW` |
+
+Evaluation order is kind → area → placement → mode → cross-area → float → allow. Empty predicate sets are unrestricted. The explicit `targetArea` wins; otherwise `targetGroup` is resolved. Unknown content identity rejects only when a kind allow-list exists; unknown target area skips the area check; unknown source area skips the cross-area check. A null resolver `Optional` is treated as empty. Structural validation in `WindowManager` remains authoritative for missing identities.
+
+`DockPolicySpec`/`fromSpec` are pure and unit-tested but not wired into production policy discovery or pointer drags in this baseline.
+
 ### Policy-supplied keys
 
 `DockPolicy.evaluate` may return any nonblank reason key. The first rejecting policy wins. Keys such as `dock.policy.denied`, `dock.policy.first`, and `dock.policy.second` appear in tests as examples, not as a platform-defined enumeration.
@@ -79,17 +94,17 @@ There is no baseline public `DiagnosticsService`. Diagnostics are Java `java.uti
 - `DockModifier` is not interpreted. A modifier does not change a rejection or implement copy/new-window behavior.
 - Reason keys are not automatically localized by `DefaultWindowManager`; callers must present them appropriately.
 
-Sources: [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java), [`DockDecision.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockDecision.java), [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java).
+Sources: [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java), [`DockDecision.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockDecision.java), [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java), [`DockPolicySpec.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicySpec.java).
 
 ## 25.3 Drop reason keys and announcements
 
 | Key | Origin | Meaning |
 |---|---|---|
-| `drop.no-handler` | `DropRouter` / tab-pane routing | Used when no handler accepts and no matching rejection was recorded, including no handlers/targets; otherwise the first matching rejection is returned |
+| `drop.no-handler` | `DropRouter` / tab-pane routing | Within one `resolveDetailed` attempt, used when no handler accepts and no real matching rejection was recorded, including no handlers/targets. Cross-source shell routing may retain an earlier synthetic `drop.no-handler`, masking a later real rejection. |
 | `drop.open.failed` | `NbfxTabPane` legacy file-open fallback | Openable files were dropped, but no editor `ContentManager` was available |
 | Handler-defined key | `DropHandler.evaluate` | First matching rejection is retained when no handler accepts |
 
-`DropAccessibility` localizes `drop.no-handler` and `drop.open.failed`; other keys are announced verbatim. Accepted drops and legacy file-open success announce acceptance. Internal tab drags and navigator-owned targets remain silent.
+`DropAccessibility` localizes `drop.no-handler` and `drop.open.failed`; other keys are announced verbatim. Accepted drops and legacy file-open success announce acceptance. Navigator-owned targets remain silent. Internal tab drags are silent only when their adapted payload is empty: `tabDrag` suppresses NODES and the gesture-source term, but not title TEXT, so a labeled tab drag can still be routed and announced.
 
 ### Drop failure containment gaps
 
@@ -186,15 +201,24 @@ Sources: [`DefaultShellFrame.java`](../../../nbfx-platform/nbfx.platform.shell/s
 | Floating pane has no stage during registration | `IllegalStateException: Floating pane has no stage` |
 | Show a closed floating/custom handle | `IllegalStateException: Window is closed` |
 | Custom options kind is not `CUSTOM` | `IllegalArgumentException: Custom windows require WindowKind.CUSTOM` |
+| Custom options use `REDOCK` | `IllegalArgumentException: Custom windows cannot redock content` |
+| Null `closePolicy` in the 12-argument `WindowOptions` constructor | `NullPointerException("closePolicy")`; the 11-argument constructor supplies `CLOSE_CONTENT` |
 | Duplicate live custom id | `IllegalArgumentException: Custom window already exists: <id>` |
 | Custom root is parented or in a scene | `IllegalArgumentException: Custom window content root is already attached` |
 | Custom root null | `NullPointerException("content root")` |
 | Close floating handle owned by another manager | `IllegalArgumentException: Window belongs to another manager` |
 | Invalid window dimensions | `IllegalArgumentException: window dimensions must be finite and positive` |
 
-`hide()` keeps a handle live. `close()` is idempotent. A custom window calls `WindowContent.close()` once even if that call throws, then removes itself from enumeration.
+`hide()` keeps a handle live. Close behavior is policy-dependent:
 
-Sources: [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java), [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java), [`FloatingWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java), [`NbfxTabPane.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/NbfxTabPane.java).
+- `HIDE` consumes the native floating/custom close request, hides the window, and leaves the handle managed and re-showable.
+- `REDOCK` is floating-only. It precomputes every tab's home or main fallback before moving anything. If any destination is missing or is the floating window itself, the method returns silently without moving tabs; on a native close request the event has already been consumed, so the window remains open with no error or reason key.
+- `CLOSE_CONTENT` is the 11-argument/default policy. Floating close uses the existing editor/view confirmation lifecycle. Custom close directly disposes `WindowContent`; it does not provide a uniform dirty-content veto.
+- Main-window close remains the existing stage/shutdown path and does not use `WindowClosePolicy`.
+
+A custom `CLOSE_CONTENT` window calls `WindowContent.close()` once even if that call throws, then removes itself from enumeration.
+
+Sources: [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java), [`WindowClosePolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowClosePolicy.java), [`WindowOptions.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/WindowOptions.java), [`CustomWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java), [`FloatingWindow.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java), [`NbfxTabPane.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/NbfxTabPane.java).
 
 ## 25.8 Stale state, corruption, and reset
 

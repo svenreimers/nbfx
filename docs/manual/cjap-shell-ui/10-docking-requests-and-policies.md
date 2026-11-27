@@ -20,7 +20,7 @@
 -->
 # 10. Docking requests and policies
 
-**Baseline:** `f2e43e8b58` (C3-2r).
+**Baseline:** `60143d8f59` (C4-3e).
 **Audience:** contributors implementing programmatic docking, policy providers, and request-based UI commands.
 
 ## 10.1 Status at a glance
@@ -29,11 +29,12 @@
 |---|---|---|
 | `DockRequest`, `DockDecision`, `DockResult`, `DockModifier` | **Implemented** | Immutable public contracts in `api.shell`. |
 | Executable `DockPolicy`, `allOf`, `anyOf` | **Implemented** | Deterministic composition with first-rejection/first-allowance rules. |
+| Declarative `DockPolicySpec` + `DockPolicy.fromSpec` | **Implemented** | Immutable predicate data can be adapted into an executable policy. |
 | Structural validation before and after policy refinement | **Implemented** | `canDock` validates the requested placement, runs policies, then validates the effective placement. |
 | All placements except `NEW_WINDOW` | **Implemented** | Group, relative tab, split, edge, and float paths exist. |
-| `NEW_WINDOW` | **Target only** | Always rejected as unsupported. |
+| `NEW_WINDOW` | **Target only** | Structural validation rejects it as unsupported before normal manager policy evaluation. |
 | Transfer copy/link and modifier semantics | **Partial** | Fields are carried and visible to policies, but the runtime always moves and ignores modifiers. |
-| Declarative `DockPolicySpec`, predicates, and `api.docking` placement | **Target only** | No such executable/spec layer is consumed here. |
+| Production spec registration, `ViewArea.policyId` wiring, and `api.docking` placement | **Target only** | The adapter exists, but the shell does not discover specs from area metadata or move the contracts to `api.docking`. |
 | Pointer tab dragging through `DockPolicy` | **Target only** | Legacy pointer dragging calls `DockArea` directly; the request/policy pipeline is programmatic. |
 
 See [WindowManager and identities](09-window-manager-and-identities.md) for handle lookup and [docking operations](11-docking-operations-and-pane-behavior.md) for the physical algorithms.
@@ -73,9 +74,9 @@ Current fields have these actual roles:
 | Field | Used structurally? | Notes |
 |---|---|---|
 | `content` | Yes | Must be open; executable placements also need a resolvable tab. |
-| `sourceGroup` | **No** | Not compared with the tab's current group. Policies may inspect it. |
-| `targetArea` | Fallback | Uses the first live pane with this legacy `PaneRole` when `targetGroup` is null. |
-| `targetGroup` | Yes, for group/split placements | Wins over `targetArea` when both are supplied. |
+| `sourceGroup` | **No** | Not compared with the tab's current group. `DockPolicy.fromSpec` may resolve it for the cross-area check. |
+| `targetArea` | Fallback | Manager structure uses the first live pane with this legacy `PaneRole` when `targetGroup` is null. A spec policy instead gives an explicit `targetArea` precedence over `targetGroup`. |
+| `targetGroup` | Yes, for group/split placements | Wins over `targetArea` in manager structure when both are supplied; a spec policy can still evaluate the explicit area instead. |
 | `targetContent` | Only `BEFORE`/`AFTER` | Must be a different tab in the resolved target group. |
 | `placement` | Yes | Selects the operation and may be refined by an allowing policy. |
 | `mode` | **No** | `MOVE`, `COPY`, and `LINK` all execute as a move. A policy can reject a mode, but cannot enable copy/link. |
@@ -107,14 +108,30 @@ public record DockResult(DockDecision decision, DockGroupId group) {
 
 ### 10.2.3 `DockPolicy`
 
-Source: [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java).
+Sources: [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java), [`DockPolicySpec.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicySpec.java).
 
 ```java
 @FunctionalInterface
 public interface DockPolicy {
     DockDecision evaluate(DockRequest request);
+
+    static DockPolicy fromSpec(
+            DockPolicySpec spec,
+            Function<ContentId, Optional<ContentKind>> contentKinds,
+            Function<DockGroupId, Optional<PaneRole>> groupAreas);
+
     static DockPolicy allOf(DockPolicy... policies);
     static DockPolicy anyOf(DockPolicy... policies);
+}
+
+public record DockPolicySpec(
+        Set<ContentKind> acceptedKinds,
+        Set<PaneRole> acceptedAreas,
+        Set<DockPlacement> placements,
+        Set<TransferMode> modes,
+        boolean allowCrossArea,
+        boolean allowFloat) {
+    public static DockPolicySpec allowAll();
 }
 ```
 
@@ -125,6 +142,20 @@ Composition rules:
 - `allOf()` with no policies allows the request's original placement.
 - Combinators copy the array, reject null elements immediately, and require non-null decisions at evaluation time.
 - `DefaultWindowManager` is slightly more tolerant: it skips null policy objects and null policy decisions. Its policy supplier/collection itself must be usable.
+
+`DockPolicySpec` defensively copies all four sets. Null sets and null elements are rejected. **Empty sets mean unrestricted**, not deny-all; `allowAll()` is the canonical empty-set specification with `allowCrossArea=true` and `allowFloat=true`.
+
+`fromSpec` requires a non-null spec and both resolver functions. `contentKinds` is resolved only when the kind allow-list is nonempty and the content id is non-null. After the kind check, the policy attempts target-area resolution whenever `targetArea` is absent and `targetGroup` is non-null—even if every predicate set is empty and both boolean gates allow everything. Source-area resolution occurs only for an active cross-area check. Null ids, a null `Optional`, and `Optional.empty()` all mean unknown. Resolver exceptions propagate. Evaluation order and rejection keys are:
+
+1. content kind → `dock.policy.kind` when `acceptedKinds` is nonempty and the kind is unknown/not accepted;
+2. target area → `dock.policy.area` when `acceptedAreas` is nonempty and the resolved area is known/not accepted;
+3. placement → `dock.policy.placement`;
+4. transfer mode → `dock.policy.mode`;
+5. cross-area → `dock.policy.cross-area` when disabled and both source/target areas resolve differently;
+6. float → `dock.policy.float` when disabled and placement is `FLOAT` or `NEW_WINDOW`;
+7. otherwise allow the request's original placement.
+
+Unknown target areas skip the area predicate; unknown source/target areas skip the cross-area predicate. For target-area resolution the spec policy uses explicit `request.targetArea()` first, then resolves `request.targetGroup()`. Manager structure does the opposite precedence (`targetGroup` first), so a request containing conflicting fields can be judged against different areas. Structural validation still runs first in `WindowManager`: a normal `NEW_WINDOW` request therefore returns `dock.placement.unsupported` before a discovered policy can return `dock.policy.float`.
 
 ### 10.2.4 Placement vocabulary
 
@@ -229,8 +260,11 @@ Defaults are exactly:
 
 ```java
 new WindowOptions(WindowKind.FLOATING, null, null, null, null,
-                  false, 600, 400, true, false, null);
+                  false, 600, 400, true, false, null,
+                  WindowClosePolicy.CLOSE_CONTENT);
 ```
+
+The implementation uses the 11-argument compatibility constructor, which now defaults to `CLOSE_CONTENT`; it does **not** choose the target's floating `REDOCK` default. See [floating close policies](12-floating-and-redocking.md#129-close-policies).
 
 ### 10.5.2 INTO_GROUP / TAB_STRIP
 
@@ -275,6 +309,12 @@ These are all reason keys emitted by production docking code in this baseline. P
 | `dock.placement.unsupported` | `DefaultWindowManager` | `NEW_WINDOW`, null effective placement, or any placement outside the implemented branches. |
 | `dock.window.missing` | `DefaultWindowManager.redock` | Handle is not a `FloatingWindow`, belongs to another manager, has no stage, or its pane is no longer registered. |
 | `dock.window.mismatch` | `DefaultWindowManager.redock` | `request.content()` does not resolve to a tab in the floating window's pane. |
+| `dock.policy.kind` | `DockPolicy.fromSpec` | Nonempty `acceptedKinds` and the content kind is unknown or not accepted. |
+| `dock.policy.area` | `DockPolicy.fromSpec` | Nonempty `acceptedAreas` and the resolved target area is known but not accepted. |
+| `dock.policy.placement` | `DockPolicy.fromSpec` | Nonempty `placements` excludes the requested placement. |
+| `dock.policy.mode` | `DockPolicy.fromSpec` | Nonempty `modes` excludes the requested transfer mode. |
+| `dock.policy.cross-area` | `DockPolicy.fromSpec` | Cross-area moves disabled and both areas resolve differently. |
+| `dock.policy.float` | `DockPolicy.fromSpec` | Float moves disabled and placement is `FLOAT` or `NEW_WINDOW` when the policy is evaluated directly. |
 | `dock.policy.none` | `DockPolicy.anyOf` | `anyOf` is evaluated with no policies. |
 
 Notes:
@@ -282,19 +322,20 @@ Notes:
 - Rejections from custom policies pass through unchanged; `DockDecision` requires only a nonblank key.
 - Test fixtures use illustrative keys such as `dock.policy.denied`, `dock.policy.first`, and `dock.policy.second`; these are not built-in runtime keys.
 - There are no bundle entries in this baseline mapping the built-in keys to user-visible text. A UI must not present the raw key as polished localized copy without its own mapping.
-- There is no separate source-group-mismatch, copy-unsupported, permission, or capability reason key because those checks do not exist.
+- `NEW_WINDOW` normally never reaches a discovered policy through `WindowManager`, because structural validation rejects it first; `dock.policy.float` for `NEW_WINDOW` is observable when evaluating `fromSpec` directly. A policy that refines another placement to `NEW_WINDOW` is caught by final structural revalidation as `dock.placement.unsupported`.
 
 ## 10.7 Ignored and unsupported semantics
 
 Do not infer behavior from the presence of a field or enum value:
 
-- `sourceGroup` is advisory to policies only; a stale or wrong value does not reject the request.
+- `sourceGroup` is not checked against the tab's actual group by manager structure. A `fromSpec` policy can use it for cross-area evaluation, but a stale/wrong value is not otherwise rejected.
 - `TransferMode.COPY` does not clone content. `LINK` does not create a link. Both move the existing tab.
 - `DockModifier.COPY`, `FLOAT`, and `NEW_WINDOW` do not change the placement. Only `DockPlacement.FLOAT` invokes floating.
 - `NEW_WINDOW` is not an alias for FLOAT or CUSTOM.
 - `TAB_STRIP` is currently the same append behavior as `INTO_GROUP`.
 - Area capabilities, group capacity, group lifetime, and pure `ViewArea.policyId` are not consulted.
-- Policy registration is global, not scoped to a product/window/area.
+- `DockPolicySpec` has no production registration/discovery path and is not selected through `ViewArea.policyId`; callers must construct/register a `DockPolicy` themselves.
+- Discovered executable policy registration is global, not scoped to a product/window/area.
 - The runtime does not provide one-gesture undo or rollback. A later exception after tabs/panes have moved is not automatically reversed.
 
 ## 10.8 Pointer dragging is a separate path
@@ -330,6 +371,21 @@ public final class RejectCopyDockPolicy implements DockPolicy {
 
 This rejects COPY before execution; it does not implement copying. Because discovery uses global lookup, the policy applies to every manager using that lookup unless an injected test supplier says otherwise.
 
+Declarative-spec adapter example:
+
+```java
+DockPolicySpec spec = new DockPolicySpec(
+        Set.of(ContentKind.VIEW), Set.of(PaneRole.NAVIGATOR),
+        Set.of(DockPlacement.INTO_GROUP), Set.of(TransferMode.MOVE),
+        false, true);
+DockPolicy policy = DockPolicy.fromSpec(
+        spec,
+        contentId -> contentManager.find(contentId).map(Content::kind),
+        groupId -> Optional.of(PaneRole.NAVIGATOR));
+```
+
+The resolver functions must return `Optional`; null/empty means unknown. This example still requires explicit registration—there is no `ViewArea.policyId` auto-wiring.
+
 Composition example:
 
 ```java
@@ -357,12 +413,12 @@ For an allowed request, `combined` refines the effective placement to `TAB_STRIP
 ## 10.11 Tests and source map
 
 - [`WindowManagerTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowManagerTest.java) — policy rejection, group/relative/split/edge/FLOAT execution, `NEW_WINDOW` rejection.
-- [`DockPolicyTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockPolicyTest.java) — all-of/any-of ordering, short-circuiting, refinement, empty composition.
+- [`DockPolicyTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockPolicyTest.java) — all-of/any-of ordering, short-circuiting, refinement, empty composition, and `fromSpec` kind/area/placement/mode/cross-area/float predicates plus set copying.
 - [`DefaultWindowManager.java`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/DefaultWindowManager.java) — validation, policy loop, execution, reason keys.
 - [`DockArea.java`](../../../nbfx-platform/nbfx.platform.workspace/src/org/netbeans/modules/nbfx/platform/workspace/DockArea.java) — split/relocate primitives used after acceptance.
 
 ## 10.12 Current versus target
 
-The [target reference](../../reference/cjap-shell-ui.md#7-docking-policy-and-transfer) places these contracts in `api.docking`, defines immutable `DockPolicySpec` data and executable predicates, and requires internal drags to pass through policy before drop handling. Empty policy sets are intended to deny all; this baseline instead allows structurally valid requests when no policies are discovered.
+The [target reference](../../reference/cjap-shell-ui.md#7-docking-policy-and-transfer) places these contracts in `api.docking` and requires internal drags to pass through policy before drop handling. This baseline implements `DockPolicySpec` and `fromSpec` in `api.shell`, but with **empty sets meaning unrestricted**; that differs from the target's deny-all-empty-spec rule. No production spec registration or `ViewArea.policyId` wiring exists, and no discovered policies means structurally valid requests are allowed.
 
 Also target-only: distinct `NEW_WINDOW` semantics, copy/link transfer behavior, capability/capacity enforcement, per-area policy resolution, pointer-policy integration, and gesture-scoped undo. See [current-to-target migration](27-current-to-target-migration.md).

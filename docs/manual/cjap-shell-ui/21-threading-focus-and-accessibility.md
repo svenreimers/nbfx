@@ -38,6 +38,7 @@ Navigation: [previous: drag and drop](20-drag-and-drop.md) ·
 | Normal shutdown cleanup off the FX thread | **Implemented** | `requestQuit` runs coordinator cleanup asynchronously with a 30-second timeout. |
 | Last-resort shutdown cleanup | **Legacy** | `stop()` invokes it synchronously on FX when normal quit was bypassed. |
 | Active view/editor action-context bridge | **Implemented** | `ShellApplication` publishes to global `ActiveComponentContext` from `NbfxTabPane` notifications; a proxy feeds global action lookup. |
+| `DockWindow.show` best-effort activation | **Implemented** | Main/floating/custom handles call `WindowActivation.show`: `show`, `toFront`, `requestFocus`; no logical-context guarantee. |
 | Separate OS activation, logical selection, and keyboard focus | **Target only** | No `FocusController`; current state is split among static pane fields and JavaFX properties. |
 | Per-window focus scope and deterministic multiwindow restoration | **Target only** | Shell and several tab registries are one-per-JVM; restoration is heuristic. |
 | Shell region roles/names and external drop announcements | **Implemented** | Hard-coded English region labels; menu/toolbar roles; accessible text/help notifications. |
@@ -60,6 +61,7 @@ hand results back with `Platform.runLater`.
 | `ShellRegionHost.mount/update/dispose/close` | Explicit FX check with message `Shell region lifecycle requires the JavaFX Application Thread`. |
 | `ShellContribution.create/dispose` | Contract requires FX; host calls them on FX. |
 | `WindowManager` operations that change the scene graph | API documents FX requirement; implementation does not marshal or consistently pre-check. |
+| `DockWindow.show` | Calls `WindowActivation.show` on FX: `Stage.show`, `toFront`, then `requestFocus`. OS activation remains best effort. |
 | `ViewManager.show/hide` | FX requirement; tab creation/removal and focus are immediate or `Platform.runLater` deferred. |
 | `Command.run` | API contract says FX. Long work must be moved to a worker by the command. |
 | Tab drag/drop, `TabMover`, accessible announcements | JavaFX event/filter paths; FX. |
@@ -207,10 +209,13 @@ flowchart TD
         PUB[ShellApplication publishActiveComponent]
     end
 
+    ACT[WindowActivation.show\nshow -> toFront -> requestFocus]
     ACC[ActiveComponentContextService\nEditorComponent or ViewComponent]
     ED[EditorContextService activeDocument]
     GLOBAL[NbfxGlobalContextProvider proxy\nlast selection-bearing lookup retained]
 
+    ACT --> WF
+    ACT -. no tab or logical-context guarantee .-> ACC
     SEL --> CP
     SEL --> NOTIFY
     FOC --> LF
@@ -316,6 +321,15 @@ focus-isolation scenario.
 - Selecting a tab focuses an editor through `EditorDocument.requestFocus`; other content is focused
   directly if traversable, otherwise the pane is focused only when focus is outside it.
 - Requests are queued with `Platform.runLater` and rechecked to reduce focus stealing.
+- `MainDockWindow.show`, `FloatingWindow.show`, and `CustomWindow.show` delegate to
+  `WindowActivation.show(stage)`, which calls `show()`, `toFront()`, then `requestFocus()`. This is
+  best-effort OS/window activation only; it does not select a tab, publish logical group/content
+  context, or provide a `FocusController` guarantee.
+- Initial floating creation uses `NbfxTabPane.showDetachedPane`, which calls `stage.show()` directly.
+  Repeating `floatContent`/`floatGroup` for an already-floating pane returns the existing handle and
+  calls its `show()` helper instead.
+- `TabMover` cancels on Escape, mouse press, or window focus loss. Cancellation removes the scene
+  key/mouse filters and window-focus listener, hides the drop line/frame, and clears the active mover.
 - Clicking a different pane causes the `ShellApplication` bridge to publish its selected tab even
   when that tab's selection does not change; clicking the already-current `componentPane` does not
   emit another active-pane notification.
@@ -500,6 +514,11 @@ implementation must not unconditionally block for a long time.
   [`AppState`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/AppState.java)
 - [`SlidingArea`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/SlidingArea.java),
   [`NbfxTheme`](../../../nbfx-platform/nbfx.platform.theme/src/org/netbeans/modules/nbfx/platform/theme/NbfxTheme.java)
+- [`WindowActivation`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/WindowActivation.java),
+  [`MainDockWindow`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/MainDockWindow.java),
+  [`FloatingWindow`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/FloatingWindow.java),
+  [`CustomWindow`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/CustomWindow.java),
+  [`TabMover`](../../../nbfx-platform/nbfx.platform.shell/src/org/netbeans/modules/nbfx/platform/shell/TabMover.java)
 
 ### Tests
 
@@ -515,6 +534,11 @@ implementation must not unconditionally block for a long time.
   covers result announcements.
 - [`NbfxThemeTest`](../../../nbfx-platform/nbfx.platform.theme/test/unit/src/org/netbeans/modules/nbfx/platform/theme/NbfxThemeTest.java)
   covers the bundled high-contrast theme/color scheme.
+- [`WindowActivationTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowActivationTest.java)
+  verifies `show()` and a `toFront()` request; it does not assert `requestFocus()` or actual OS
+  activation.
+- [`TabMoverTest`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/TabMoverTest.java)
+  verifies Escape/explicit cancellation, not window-focus-loss cancellation.
 
 There is no dedicated shutdown timeout/participant-order test, no `FocusController` test, and no shell
 RTL/reduced-motion conformance suite in the baseline.
@@ -529,7 +553,8 @@ present, including explicit region checks and asynchronous normal shutdown.
 The [target accessibility reference](../../reference/cjap-shell-ui.md#accessibility-motion-rtl-and-localization)
 goes further: distinct selected/focus state, complete chrome/drop/split semantics, keyboard
 alternatives, reduced motion, high contrast, and RTL mirroring. Those remain **Partial** or
-**Target only** as listed above. The absent `FocusController` and three-fact model are the largest
-architectural gap.
+**Target only** as listed above. `WindowActivation` improves best-effort window raising but does not
+supply logical selection or keyboard-focus ownership. The absent `FocusController` and three-fact
+model remain the largest architectural gap.
 
 Next: [22. Product integration recipes](22-product-integration-recipes.md).

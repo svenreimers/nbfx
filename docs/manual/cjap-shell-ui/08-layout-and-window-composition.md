@@ -20,7 +20,7 @@
 -->
 # 8. Layout and window composition
 
-**Baseline:** `f2e43e8b58` (C3-2r).
+**Baseline:** `60143d8f59` (C4-3e).
 **Audience:** product developers, shell maintainers, and contributors declaring panes or layouts.
 
 ## 8.1 Status at a glance
@@ -33,7 +33,9 @@
 | `org.netbeans.spi.nbfx.shell.WindowPane*` | **Legacy** | The SPI remains, but its host is still the shell's internal `NbfxTabPane`. |
 | Pure `api.layout.LayoutSpec` builder, XML, annotations, and registry | **Implemented** | Immutable, content-free layouts can be authored and discovered. |
 | Consumption of `LayoutSpec` by the live dock runtime | **Target only** | `DockRuntime` does **not** read `LayoutRegistry` or build itself from `LayoutSpec`. |
-| Target area capabilities, presentations, empty policies, and declarative docking-policy specs affecting live panes | **Target only** | The pure metadata exists, but the live pane runtime does not enforce it. |
+| `DockPolicySpec` and `DockPolicy.fromSpec` in `api.shell` | **Implemented** | Immutable declarative policy data and an executable adapter exist and are tested. |
+| `ViewArea.policyId`/`DockGroupSpec.policyId` resolution, automatic production wiring, pointer-drag integration, and `api.docking` placement | **Target only** | The ids are metadata only; no production code resolves them into `DockPolicySpec`, and pointer drags do not automatically run the spec adapter. |
+| Target area capabilities, presentations, and empty policies affecting live panes | **Target only** | The pure metadata exists, but the live pane runtime does not enforce it. |
 
 The central rule for this chapter is:
 
@@ -463,7 +465,58 @@ All fields are required and non-null; `policyId` must be nonblank. Enums are:
 
 `DockGroupId.of("product:editor.main")` creates a stable namespaced identity with `namespace()`, `name()`, and `value()`. It is a declaration identity, not the id currently assigned to an `NbfxTabPane`.
 
-### 8.7.4 `LayoutSpec` and `LayoutNode`
+### 8.7.4 Declarative docking-policy data in `api.shell`
+
+Sources: [`DockPolicySpec.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicySpec.java), [`DockPolicy.java`](../../../nbfx-platform/nbfx.api.shell/src/org/netbeans/api/nbfx/shell/DockPolicy.java).
+
+```java
+public record DockPolicySpec(
+        Set<ContentKind> acceptedKinds,
+        Set<PaneRole> acceptedAreas,
+        Set<DockPlacement> placements,
+        Set<TransferMode> modes,
+        boolean allowCrossArea,
+        boolean allowFloat) {
+    public static DockPolicySpec allowAll();
+}
+
+public interface DockPolicy {
+    DockDecision evaluate(DockRequest request);
+
+    static DockPolicy fromSpec(
+            DockPolicySpec spec,
+            Function<ContentId, Optional<ContentKind>> contentKinds,
+            Function<DockGroupId, Optional<PaneRole>> groupAreas);
+}
+```
+
+This is an **Implemented** executable API, but it currently lives in `api.shell`, not the target
+`api.docking` module. Its `PaneRole` is the shell package's live role type, not
+`api.layout.PaneRole`. The record defensively copies all four sets and rejects null sets.
+
+Current `fromSpec` semantics differ from the target's deny-all-empty-set rule: **empty sets are
+unrestricted**. `allowAll()` returns empty sets with both booleans true. A non-empty kind set
+rejects unknown/mismatched content with `dock.policy.kind`; area, placement, and mode mismatches
+use `dock.policy.area`, `dock.policy.placement`, and `dock.policy.mode`. The target area is the
+request's explicit `targetArea`, or the `groupAreas` result for `targetGroup`. If that area cannot
+be resolved, a non-empty accepted-area set does not reject it. Cross-area rejection
+(`dock.policy.cross-area`) requires both source and target areas to resolve and differ.
+`allowFloat=false` rejects `FLOAT` and `NEW_WINDOW` with `dock.policy.float`. An allowed request
+returns `DockDecision.allow(request.placement())`.
+
+Production integration is still **Target only**:
+
+- `DefaultWindowManager` consults registered `DockPolicy` services, but no production code calls
+  `DockPolicy.fromSpec` or constructs a `DockPolicySpec`;
+- pure `ViewArea.policyId` and `DockGroupSpec.policyId` are not resolved against a policy registry;
+- `LayoutRegistry` does not attach executable policies to live groups; and
+- pointer tab/pane drag operations do not automatically evaluate these specs. Programmatic
+  `canDock`/`dock` can consume a caller-registered policy, but that is not declarative production
+  wiring.
+
+Moving these contracts to `api.docking` also remains **Target only**.
+
+### 8.7.5 `LayoutSpec` and `LayoutNode`
 
 Sources: [`LayoutSpec.java`](../../../nbfx-platform/nbfx.api.layout/src/org/netbeans/api/nbfx/layout/LayoutSpec.java), [`LayoutNode.java`](../../../nbfx-platform/nbfx.api.layout/src/org/netbeans/api/nbfx/layout/LayoutNode.java).
 
@@ -507,7 +560,7 @@ Construction invariants:
 
 `normalized()` returns an idempotent canonical copy: areas by `order`/id, groups by id, metadata by key; unreferenced transient groups are removed; referenced transient groups remain; signed-zero dividers become positive zero. Invalid geometry is rejected, not clamped.
 
-### 8.7.5 Builder and XML defaults
+### 8.7.6 Builder and XML defaults
 
 Sources: [`LayoutBuilder.java`](../../../nbfx-platform/nbfx.api.layout/src/org/netbeans/api/nbfx/layout/LayoutBuilder.java), [`LayoutXml.java`](../../../nbfx-platform/nbfx.api.layout/src/org/netbeans/api/nbfx/layout/LayoutXml.java).
 
@@ -542,7 +595,7 @@ XML supports format version 1 only. The caller owns and closes the main stream. 
 | metadata `<entry>` | `key`, `value` | value may be empty |
 | `<include>` | `path` | only in areas/groups |
 
-### 8.7.6 Declarative pure layouts and registry
+### 8.7.7 Declarative pure layouts and registry
 
 Sources: [`LayoutRegistration.java`](../../../nbfx-platform/nbfx.api.layout/src/org/netbeans/api/nbfx/layout/LayoutRegistration.java), [`LayoutRegistry.java`](../../../nbfx-platform/nbfx.api.layout/src/org/netbeans/api/nbfx/layout/LayoutRegistry.java).
 
@@ -574,7 +627,7 @@ The annotation processor validates complete self-contained version-1 XML, checks
 
 Malformed entries are logged and skipped. A standalone group with an unresolved area is skipped. The catalogs are not implicitly merged into each other or into the live view-area/window-pane registries.
 
-### 8.7.7 Pure-layout example
+### 8.7.8 Pure-layout example
 
 ```java
 PaneRole side = PaneRole.of("product:side");
@@ -628,9 +681,15 @@ Key tests:
 - [`WindowPaneRegistryTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowPaneRegistryTest.java) and [`WindowPaneProviderTest.java`](../../../nbfx-platform/nbfx.platform.shell/test/unit/src/org/netbeans/modules/nbfx/platform/shell/WindowPaneProviderTest.java).
 - [`DockTreesTest.java`](../../../nbfx-platform/nbfx.platform.workspace/test/unit/src/org/netbeans/modules/nbfx/platform/workspace/DockTreesTest.java) and [`DockAreaTest.java`](../../../nbfx-platform/nbfx.platform.workspace/test/unit/src/org/netbeans/modules/nbfx/platform/workspace/DockAreaTest.java).
 - [`LayoutSpecTest.java`](../../../nbfx-platform/nbfx.api.layout/test/unit/src/org/netbeans/api/nbfx/layout/LayoutSpecTest.java), [`LayoutXmlTest.java`](../../../nbfx-platform/nbfx.api.layout/test/unit/src/org/netbeans/api/nbfx/layout/LayoutXmlTest.java), [`LayoutIdTest.java`](../../../nbfx-platform/nbfx.api.layout/test/unit/src/org/netbeans/api/nbfx/layout/LayoutIdTest.java), and [`LayoutRegistryTest.java`](../../../nbfx-platform/nbfx.api.layout/test/unit/src/org/netbeans/api/nbfx/layout/LayoutRegistryTest.java).
+- [`DockPolicyTest.java`](../../../nbfx-platform/nbfx.api.shell/test/unit/src/org/netbeans/api/nbfx/shell/DockPolicyTest.java) — `fromSpec` kind/area/placement/mode, cross-area/float gates, stable rejection keys, and defensive copies.
 
 ## 8.10 Current versus target
 
 The [ADR](../../architecture/adr-0001-cjap-shell-ui.md) and [target reference](../../reference/cjap-shell-ui.md) require the runtime to be built from `LayoutSpec`, with logical areas containing physical groups and explicit capabilities/presentations. This baseline instead retains the implementation-led pane/tree runtime. The pure API is real and tested, but it is not a product-facing way to change the live window yet.
 
-Also still target-only: runtime enforcement of area capabilities and empty policies, tabbed/single/canvas/overlay/headerless presentation hosts, `DockPolicySpec` resolution from pure layout metadata, and removal of static `Docking`/`WindowPane*` after migration. See [current-to-target migration](27-current-to-target-migration.md).
+`DockPolicySpec` and `DockPolicy.fromSpec` now exist as executable API in `api.shell`. Still
+target-only: resolving `ViewArea.policyId`/`DockGroupSpec.policyId`, automatic production wiring,
+pointer-drag integration, and moving the contracts to `api.docking`. Also target-only are runtime
+enforcement of area capabilities and empty policies, tabbed/single/canvas/overlay/headerless
+presentation hosts, and removal of static `Docking`/`WindowPane*` after migration. See
+[current-to-target migration](27-current-to-target-migration.md).
