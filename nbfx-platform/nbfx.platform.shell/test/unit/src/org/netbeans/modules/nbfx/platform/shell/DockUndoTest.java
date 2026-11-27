@@ -110,6 +110,10 @@ public class DockUndoTest {
             NbfxTabPane other = new NbfxTabPane(PaneRole.NAVIGATOR);
             DefaultContentManager contentManager = new DefaultContentManager();
             try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), other);
+                Docking.create(new WindowComposition(List.of(), null), panes);
                 DefaultWindowManager manager = new DefaultWindowManager(contentManager);
                 ViewContent content = new ViewContent(new FakeView("undo.invalidate", "Invalidate"));
                 contentManager.open(content);
@@ -129,6 +133,54 @@ public class DockUndoTest {
             } finally {
                 NbfxTabPane.unregister(main);
                 NbfxTabPane.unregister(other);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void groupMoveIsOneUndoableGesture() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane other = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), other);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent first = new ViewContent(new FakeView("undo.group.first", "First"));
+                ViewContent second = new ViewContent(new FakeView("undo.group.second", "Second"));
+                contentManager.open(first);
+                contentManager.open(second);
+                Tab firstTab = new Tab("First");
+                Tab secondTab = new Tab("Second");
+                NbfxTabPane.setViewId(firstTab, "undo.group.first");
+                NbfxTabPane.setViewId(secondTab, "undo.group.second");
+                NbfxTabPane.attachTab(main, firstTab);
+                NbfxTabPane.attachTab(main, secondTab);
+
+                manager.moveGroup(main.groupId(), other.groupId(), 0);
+                assertEquals(List.of(firstTab, secondTab), other.getTabs());
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertEquals(List.of(firstTab, secondTab), main.getTabs());
+                assertTrue(other.getTabs().isEmpty());
+                manager.redo();
+                assertEquals(List.of(firstTab, secondTab), other.getTabs());
+                assertEquals(secondTab, other.getSelectionModel().getSelectedItem());
+            } finally {
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(other);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
             }
             return null;
         });

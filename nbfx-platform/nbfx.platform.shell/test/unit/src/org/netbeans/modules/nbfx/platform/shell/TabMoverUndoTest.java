@@ -90,6 +90,59 @@ public class TabMoverUndoTest {
         });
     }
 
+    @Test
+    public void keyboardPaneJoinRecordsOneGroupUndoEdit() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            Stage stage = null;
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                Docking.runtime().setWindowManager(manager);
+                Scene scene = new Scene(Docking.runtime().slides(), 800, 600);
+                stage = new Stage();
+                stage.setScene(scene);
+                stage.show();
+
+                ViewContent firstContent = new ViewContent(new FakeView("keyboard.group.first", "First"));
+                ViewContent secondContent = new ViewContent(new FakeView("keyboard.group.second", "Second"));
+                contentManager.open(firstContent);
+                contentManager.open(secondContent);
+                Tab first = new Tab("First");
+                Tab second = new Tab("Second");
+                NbfxTabPane.setViewId(first, "keyboard.group.first");
+                NbfxTabPane.setViewId(second, "keyboard.group.second");
+                NbfxTabPane.attachTab(main, first);
+                NbfxTabPane.attachTab(main, second);
+
+                TabMover.movePane(main);
+                Event.fireEvent(scene, new KeyEvent(KeyEvent.KEY_PRESSED, "", "", KeyCode.ENTER,
+                        false, false, false, false));
+                assertEquals(List.of(first, second), navigator.getTabs());
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertEquals(List.of(first, second), main.getTabs());
+            } finally {
+                TabMover.cancelActive();
+                if (stage != null) {
+                    stage.close();
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
     private static final class FakeView implements ViewProvider {
         private final String id;
         private final String title;

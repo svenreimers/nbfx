@@ -85,8 +85,9 @@ final class DefaultWindowManager implements WindowManager {
     private record Location(DockGroupId group, int index, boolean selected) {
     }
 
-    private record DockEdit(ContentId content, Location undoLocation, Supplier<Boolean> redo,
-            boolean select, BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
+    private record DockEdit(List<ContentId> contents, List<Location> undoLocations,
+            Supplier<Boolean> redo, ContentId selected, BooleanSupplier undoApplicable,
+            BooleanSupplier redoApplicable) {
     }
 
     DefaultWindowManager(ContentManager contentManager) {
@@ -149,6 +150,54 @@ final class DefaultWindowManager implements WindowManager {
         Location after = location(content);
         recordEdit(content, before, false,
                 () -> moveInternal(content, after.group(), after.index(), false));
+    }
+
+    @Override
+    public void moveGroup(DockGroupId source, DockGroupId target, int index) {
+        TabPane sourcePane = paneForGroup(source);
+        TabPane targetPane = paneForGroup(target);
+        if (sourcePane == null || targetPane == null || sourcePane == targetPane
+                || sourcePane.getTabs().isEmpty()) {
+            return;
+        }
+        List<Tab> tabs = List.copyOf(sourcePane.getTabs());
+        List<ContentId> contents = new ArrayList<>();
+        List<Location> locations = new ArrayList<>();
+        ContentId selected = null;
+        boolean recordable = true;
+        for (Tab tab : tabs) {
+            Optional<ContentId> id = NbfxTabPane.contentIdForTab(tab);
+            if (id.isEmpty()) {
+                recordable = false;
+                continue;
+            }
+            contents.add(id.get());
+            locations.add(new Location(((NbfxTabPane) sourcePane).groupId(),
+                    sourcePane.getTabs().indexOf(tab), tab.isSelected()));
+            if (tab.isSelected()) {
+                selected = id.get();
+            }
+        }
+        if (!moveGroupInternal(source, target, index)) {
+            return;
+        }
+        redoStack.clear();
+        if (recordable) {
+            recordGroupEdit(contents, locations, selected, () -> moveGroupInternal(source, target, index));
+        }
+    }
+
+    private boolean moveGroupInternal(DockGroupId source, DockGroupId target, int index) {
+        TabPane sourcePane = paneForGroup(source);
+        TabPane targetPane = paneForGroup(target);
+        if (sourcePane == null || targetPane == null || sourcePane == targetPane) {
+            return false;
+        }
+        List<Tab> tabs = List.copyOf(sourcePane.getTabs());
+        for (int i = 0; i < tabs.size(); i++) {
+            NbfxTabPane.moveTab(targetPane, tabs.get(i), index < 0 ? targetPane.getTabs().size() : index + i);
+        }
+        return true;
     }
 
     @Override
@@ -341,7 +390,13 @@ final class DefaultWindowManager implements WindowManager {
             return;
         }
         DockEdit edit = undoStack.pop();
-        moveInternal(edit.content(), edit.undoLocation().group(), edit.undoLocation().index(), edit.select());
+        for (int i = 0; i < edit.contents().size(); i++) {
+            Location location = edit.undoLocations().get(i);
+            moveInternal(edit.contents().get(i), location.group(), location.index(), false);
+        }
+        if (edit.selected() != null) {
+            select(edit.selected());
+        }
         redoStack.push(edit);
     }
 
@@ -361,6 +416,9 @@ final class DefaultWindowManager implements WindowManager {
         DockEdit edit = redoStack.pop();
         boolean success = edit.redo().get();
         if (success) {
+            if (edit.selected() != null) {
+                select(edit.selected());
+            }
             undoStack.push(edit);
         }
     }
@@ -378,10 +436,19 @@ final class DefaultWindowManager implements WindowManager {
         if (before == null) {
             return;
         }
+        recordGroupEdit(List.of(content), List.of(before), select ? content : null, redo);
+    }
+
+    private void recordGroupEdit(List<ContentId> contents, List<Location> undoLocations,
+            ContentId selected, Supplier<Boolean> redo) {
+        if (contents.isEmpty() || contents.size() != undoLocations.size()) {
+            return;
+        }
         redoStack.clear();
-        DockEdit edit = new DockEdit(content, before, redo, select,
-                () -> paneForGroup(before.group()) != null && findTab(content).isPresent(),
-                () -> findTab(content).isPresent());
+        DockEdit edit = new DockEdit(List.copyOf(contents), List.copyOf(undoLocations), redo, selected,
+                () -> undoLocations.stream().allMatch(location -> paneForGroup(location.group()) != null)
+                        && contents.stream().allMatch(content -> findTab(content).isPresent()),
+                () -> contents.stream().allMatch(content -> findTab(content).isPresent()));
         undoStack.push(edit);
         while (undoStack.size() > 100) {
             undoStack.removeLast();

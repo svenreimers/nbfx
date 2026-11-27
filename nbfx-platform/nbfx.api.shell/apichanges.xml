@@ -392,6 +392,22 @@
             </description>
             <class package="org.netbeans.api.nbfx.shell" name="WindowManager"/>
         </change>
+        <change id="cjap.shell.move-group">
+            <api name="netbeansfx_shell"/>
+            <summary>Single-gesture group move operation.</summary>
+            <version major="1" minor="18"/>
+            <date day="27" month="11" year="2026"/>
+            <author login="svenreimers"/>
+            <compatibility addition="yes" modification="yes" binary="incompatible" source="incompatible" semantic="incompatible"/>
+            <description>
+                Adds <code>WindowManager.moveGroup</code>, moving all tabs from one physical group
+                into another while preserving order and recording one undo edit. Keyboard pane-join
+                moves use this operation; split/relocation remains on the direct layout path. The
+                interface expansion is intentionally incompatible for external
+                <code>WindowManager</code> implementers.
+            </description>
+            <class package="org.netbeans.api.nbfx.shell" name="WindowManager"/>
+        </change>
     </changes>
     <htmlcontents>
         <head>

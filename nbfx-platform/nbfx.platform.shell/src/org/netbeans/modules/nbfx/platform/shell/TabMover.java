@@ -158,7 +158,9 @@ final class TabMover {
         Tab selected = pane.getSelectionModel().getSelectedItem();
         start(area, candidates, candidate -> {
             if (candidate.isJoin()) {
-                moveAll(pane, candidate.pane());
+                if (!movePaneJoinWithManager(pane, candidate.pane())) {
+                    moveAll(pane, candidate.pane());
+                }
             } else if (area.contains(pane)) {
                 area.relocate(pane, candidate.target());
             } else {
@@ -169,6 +171,16 @@ final class TabMover {
                 NbfxTabPane.selectTabAndMoveToFront(selected);
             }
         });
+    }
+
+    private static boolean movePaneJoinWithManager(TabPane source, TabPane target) {
+        WindowManager manager = Docking.windowManager();
+        if (manager == null || !(source instanceof NbfxTabPane sourcePane)
+                || !(target instanceof NbfxTabPane targetPane) || sourcePane == targetPane) {
+            return false;
+        }
+        manager.moveGroup(sourcePane.groupId(), targetPane.groupId(), target.getTabs().size());
+        return true;
     }
 
     private static void moveAll(TabPane from, TabPane into) {

@@ -76,6 +76,18 @@ public interface WindowManager {
     void move(ContentId content, DockGroupId target, int index);
 
     /**
+     * Moves every tab from {@code source} into {@code target} at {@code index}, preserving tab
+     * order. The source and target must differ; unknown groups are ignored. This is one undoable
+     * gesture.
+     *
+     * @param source the source group
+     * @param target the destination group
+     * @param index the destination position
+     * @since 1.18
+     */
+    void moveGroup(DockGroupId source, DockGroupId target, int index);
+
+    /**
      * Attaches {@code content} to {@code group} at {@code index}, selects it and fronts its window.
      * A content id that is not open or a group that does not exist is ignored.
      *

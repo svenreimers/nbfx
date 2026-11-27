@@ -320,6 +320,9 @@ api.plugins (T1)        → api.layer, api.resources
   moves through it, producing one undo edit per Enter gesture. Keyboard pane moves and runtimes
   without a manager retain the direct layout path; policy rejection is authoritative and does not
   fall back to an unrecorded move.
+- C3-2y adds `WindowManager.moveGroup` and records all tab locations as one edit. Keyboard pane
+  joins use it, so one Enter gesture and one Undo restore the whole group. Split/relocation and
+  detached-pane moves remain direct until their layout inverse is defined.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler
