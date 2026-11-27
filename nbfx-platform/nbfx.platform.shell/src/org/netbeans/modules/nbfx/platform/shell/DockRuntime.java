@@ -19,6 +19,7 @@
 package org.netbeans.modules.nbfx.platform.shell;
 
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.WindowManager;
 import org.netbeans.api.nbfx.views.PaneKind;
 
 import org.netbeans.api.nbfx.views.DockLocation;
@@ -70,6 +71,8 @@ public final class DockRuntime implements DockHost<TabPane> {
     /** The default area of each docking location, snapshotted from the registry once. */
     private Map<DockLocation, ViewArea> locationAreas = Map.of();
     private SlidingArea slides;
+    /** The shell manager used to record keyboard/pointer layout gestures as undoable edits. */
+    private WindowManager windowManager;
     /**
      * The minimized pane whose tab is on loan to the sliding panel, if any. Such a pane is not
      * empty though its tab list may be, so the area must not dispose of it meanwhile.
@@ -161,6 +164,16 @@ public final class DockRuntime implements DockHost<TabPane> {
             ordered.putIfAbsent(entry.getKey(), entry.getValue());
         }
         return ordered;
+    }
+
+    /** Installs the shell manager used for undoable keyboard/pointer layout gestures. */
+    public void setWindowManager(WindowManager windowManager) {
+        this.windowManager = windowManager;
+    }
+
+    /** The installed shell manager, or {@code null} in isolated/headless runtimes. */
+    public WindowManager windowManager() {
+        return windowManager;
     }
 
     /** The runtime's area, or {@code null} after {@link #dispose()}. */
@@ -304,6 +317,7 @@ public final class DockRuntime implements DockHost<TabPane> {
         area = null;
         slides = null;
         composition = null;
+        windowManager = null;
     }
 
     // --- DockHost: the pane lifecycle the area drives --------------------------------------------

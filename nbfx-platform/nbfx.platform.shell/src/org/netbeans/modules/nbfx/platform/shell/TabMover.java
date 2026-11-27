@@ -22,6 +22,8 @@ import org.netbeans.modules.nbfx.platform.workspace.DockArea;
 import org.netbeans.modules.nbfx.platform.workspace.DropTarget;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.logging.Logger;
@@ -36,6 +38,13 @@ import javafx.scene.control.TabPane;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseEvent;
 import javafx.stage.Window;
+import org.netbeans.api.nbfx.content.ContentId;
+import org.netbeans.api.nbfx.content.DockPlacement;
+import org.netbeans.api.nbfx.content.TransferMode;
+import org.netbeans.api.nbfx.layout.DockGroupId;
+import org.netbeans.api.nbfx.shell.DockRequest;
+import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.WindowManager;
 
 /**
  * A keyboard-driven move of a tab, or of a whole pane, within the main window's {@link DockArea}: the
@@ -95,13 +104,48 @@ final class TabMover {
         boolean alone = source.getTabs().size() == 1;
         List<Candidate> candidates = candidates(area, pane -> pane != source, pane -> !(alone && pane == source));
         start(area, candidates, candidate -> {
-            if (candidate.isJoin()) {
-                NbfxTabPane.moveTab(candidate.pane(), tab, candidate.pane().getTabs().size());
-            } else {
-                NbfxTabPane.dock(tab, candidate.target());
+            if (!moveTabWithManager(tab, candidate)) {
+                if (candidate.isJoin()) {
+                    NbfxTabPane.moveTab(candidate.pane(), tab, candidate.pane().getTabs().size());
+                } else {
+                    NbfxTabPane.dock(tab, candidate.target());
+                }
+                NbfxTabPane.selectTabAndMoveToFront(tab);
             }
-            NbfxTabPane.selectTabAndMoveToFront(tab);
         });
+    }
+
+    private static boolean moveTabWithManager(Tab tab, Candidate candidate) {
+        WindowManager manager = Docking.windowManager();
+        Optional<ContentId> content = NbfxTabPane.contentIdForTab(tab);
+        if (manager == null || content.isEmpty() || !(tab.getTabPane() instanceof NbfxTabPane source)) {
+            return false;
+        }
+        ContentId contentId = content.get();
+        if (candidate.isJoin()) {
+            if (!(candidate.pane() instanceof NbfxTabPane targetPane)) {
+                return false;
+            }
+            DockGroupId target = targetPane.groupId();
+            manager.move(contentId, target, candidate.pane().getTabs().size());
+        } else {
+            DockPlacement placement = splitPlacement(candidate.side());
+            DockGroupId target = candidate.pane() instanceof NbfxTabPane nbfx ? nbfx.groupId() : null;
+            PaneRole area = candidate.pane() == null ? PaneRole.MAIN : null;
+            manager.dock(new DockRequest(contentId, source.groupId(), area, target,
+                    placement, TransferMode.MOVE, Set.of()));
+        }
+        manager.select(contentId);
+        return true;
+    }
+
+    private static DockPlacement splitPlacement(Side side) {
+        return switch (side) {
+            case LEFT -> DockPlacement.SPLIT_LEFT;
+            case RIGHT -> DockPlacement.SPLIT_RIGHT;
+            case TOP -> DockPlacement.SPLIT_TOP;
+            case BOTTOM -> DockPlacement.SPLIT_BOTTOM;
+        };
     }
 
     /** Starts moving {@code pane} with all its tabs: into another pane, or next to one, or along the area. */

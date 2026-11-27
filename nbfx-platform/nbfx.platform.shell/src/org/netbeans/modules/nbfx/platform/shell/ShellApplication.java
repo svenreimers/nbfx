@@ -193,6 +193,7 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
         }
         dockArea = Docking.create(composition, panes);
         dockRuntime = Docking.runtime();
+        dockRuntime.setWindowManager(windowManager);
         slidingArea = Docking.slides();
         ShellContext context = new ShellContext(shellLookup);
         shellContext = context;

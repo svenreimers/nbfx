@@ -1384,7 +1384,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         return TabDropIndicator.tabAt(tabPane, picked);
     }
 
-    private static Optional<org.netbeans.api.nbfx.content.ContentId> contentIdForTab(Tab tab) {
+    static Optional<org.netbeans.api.nbfx.content.ContentId> contentIdForTab(Tab tab) {
         String viewId = viewId(tab);
         if (viewId != null && !viewId.isBlank()) {
             return Optional.of(org.netbeans.api.nbfx.content.ContentId.of("nbfx:view." + viewId));

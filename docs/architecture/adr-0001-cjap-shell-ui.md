@@ -316,6 +316,10 @@ api.plugins (T1)        → api.layer, api.resources
   successful operation records source/tab order and selection; split/edge redo re-executes the
   request so removed target groups are recreated. Non-main single-pane relocations and
   float/redock/custom/close operations invalidate history rather than recording partial edits.
+- C3-2x installs the shell `WindowManager` on `DockRuntime` and routes confirmed keyboard tab
+  moves through it, producing one undo edit per Enter gesture. Keyboard pane moves and runtimes
+  without a manager retain the direct layout path; policy rejection is authoritative and does not
+  fall back to an unrecorded move.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

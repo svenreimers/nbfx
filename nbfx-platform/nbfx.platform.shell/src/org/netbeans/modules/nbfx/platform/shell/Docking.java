@@ -19,6 +19,7 @@
 package org.netbeans.modules.nbfx.platform.shell;
 
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.WindowManager;
 
 import org.netbeans.api.nbfx.views.DockLocation;
 import org.netbeans.api.nbfx.views.ViewArea;
@@ -83,6 +84,11 @@ public final class Docking {
         DockRuntime runtime = new DockRuntime(composition, primaries);
         active = runtime;
         return runtime.area();
+    }
+
+    /** The window manager installed on the active runtime, or {@code null}. */
+    public static WindowManager windowManager() {
+        return active == null ? null : active.windowManager();
     }
 
     /** The application's area, or {@code null} before it is created (or headless). */
