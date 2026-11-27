@@ -323,6 +323,10 @@ api.plugins (T1)        → api.layer, api.resources
 - C3-2y adds `WindowManager.moveGroup` and records all tab locations as one edit. Keyboard pane
   joins use it, so one Enter gesture and one Undo restore the whole group. Split/relocation and
   detached-pane moves remain direct until their layout inverse is defined.
+- C3-2z routes pointer tab joins/reorders and split/edge drops through the installed
+  `WindowManager`, producing one undo edit per successful drop. Same-position drops are no-ops;
+  policy-rejected splits fail the drop instead of falling back to an unrecorded layout mutation.
+  Pointer float/detach remains on the existing path.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

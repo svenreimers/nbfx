@@ -54,6 +54,7 @@ import org.netbeans.modules.nbfx.platform.workspace.WindowEnvironment;
 import org.netbeans.api.nbfx.layout.DockGroupId;
 import org.netbeans.api.nbfx.shell.PaneRole;
 import org.netbeans.api.nbfx.shell.ShellBranding;
+import org.netbeans.api.nbfx.shell.WindowManager;
 import org.netbeans.api.nbfx.shell.WindowPaneHost;
 import org.netbeans.spi.nbfx.shell.WindowPane;
 import org.netbeans.modules.nbfx.platform.theme.NbfxTheme;
@@ -1133,16 +1134,12 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         tabPane.addEventFilter(DragEvent.DRAG_DROPPED, e -> {
             boolean success = draggedTab(e.getDragboard()).map(dragged -> {
                 DropTarget<TabPane> target = dropTargetOf(tabPane, dragged, e);
-                if (target == null) {
-                    int dropIndex = TabDropIndicator.getDropIndex(tabPane, e.getX());
-                    applyDrop(tabPane, dragged, dropIndex);
-                    Docking.logLayout("dropping a tab on a pane");
-                } else {
-                    TabDropIndicator.hide(tabPane);
-                    selectTabAndMoveToFront(dock(dragged, target), dragged);
-                    Docking.logLayout("dropping a tab on a dock edge");
+                int dropIndex = target == null ? TabDropIndicator.getDropIndex(tabPane, e.getX()) : -1;
+                boolean applied = applyTabDrop(tabPane, dragged, target, dropIndex);
+                if (applied) {
+                    Docking.logLayout(target == null ? "dropping a tab on a pane" : "dropping a tab on a dock edge");
                 }
-                return true;
+                return applied;
             }).orElse(false);
             e.setDropCompleted(success);
             TabDropIndicator.hide(tabPane);
@@ -1447,6 +1444,68 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         return FileDragAndDrop.filesFrom(event.getDragboard(), tabPane).stream()
                 .filter(FileTypes::isOpenable)
                 .toList();
+    }
+
+    static boolean applyTabDrop(TabPane tabPane, Tab dragged, DropTarget<TabPane> target, int dropIndex) {
+        return target == null ? applyJoinDrop(tabPane, dragged, dropIndex) : applySplitDrop(dragged, target);
+    }
+
+    private static boolean applyJoinDrop(TabPane tabPane, Tab dragged, int dropIndex) {
+        WindowManager manager = Docking.windowManager();
+        Optional<org.netbeans.api.nbfx.content.ContentId> content = contentIdForTab(dragged);
+        if (manager != null && content.isPresent() && tabPane instanceof NbfxTabPane targetPane) {
+            int index = Math.clamp(dropIndex, 0, tabPane.getTabs().size());
+            if (dragged.getTabPane() == tabPane) {
+                int currentIndex = tabPane.getTabs().indexOf(dragged);
+                if (currentIndex == index) {
+                    manager.select(content.get());
+                    return true;
+                }
+                if (currentIndex >= 0 && currentIndex < index) {
+                    index--;
+                }
+            }
+            manager.attach(content.get(), targetPane.groupId(), index);
+            return true;
+        }
+        applyDrop(tabPane, dragged, dropIndex);
+        return true;
+    }
+
+    private static boolean applySplitDrop(Tab dragged, DropTarget<TabPane> target) {
+        WindowManager manager = Docking.windowManager();
+        Optional<org.netbeans.api.nbfx.content.ContentId> content = contentIdForTab(dragged);
+        if (manager != null && content.isPresent() && dragged.getTabPane() instanceof NbfxTabPane source
+                && (target.pane() == null || target.pane() instanceof NbfxTabPane)) {
+            org.netbeans.api.nbfx.content.DockPlacement placement = dockPlacement(target);
+            DockGroupId targetGroup = target.pane() instanceof NbfxTabPane nbfx ? nbfx.groupId() : null;
+            PaneRole targetArea = target.isArea() ? PaneRole.MAIN : null;
+            org.netbeans.api.nbfx.shell.DockResult result = manager.dock(
+                    new org.netbeans.api.nbfx.shell.DockRequest(content.get(), source.groupId(),
+                            targetArea, targetGroup, placement,
+                            org.netbeans.api.nbfx.content.TransferMode.MOVE, Set.of()));
+            if (!result.decision().allowed()) {
+                return false;
+            }
+            manager.select(content.get());
+            return true;
+        }
+        selectTabAndMoveToFront(dock(dragged, target), dragged);
+        return true;
+    }
+
+    private static org.netbeans.api.nbfx.content.DockPlacement dockPlacement(DropTarget<TabPane> target) {
+        Side side = target.side();
+        return switch (side) {
+            case LEFT -> target.isArea() ? org.netbeans.api.nbfx.content.DockPlacement.EDGE_LEFT
+                    : org.netbeans.api.nbfx.content.DockPlacement.SPLIT_LEFT;
+            case RIGHT -> target.isArea() ? org.netbeans.api.nbfx.content.DockPlacement.EDGE_RIGHT
+                    : org.netbeans.api.nbfx.content.DockPlacement.SPLIT_RIGHT;
+            case TOP -> target.isArea() ? org.netbeans.api.nbfx.content.DockPlacement.EDGE_TOP
+                    : org.netbeans.api.nbfx.content.DockPlacement.SPLIT_TOP;
+            case BOTTOM -> target.isArea() ? org.netbeans.api.nbfx.content.DockPlacement.EDGE_BOTTOM
+                    : org.netbeans.api.nbfx.content.DockPlacement.SPLIT_BOTTOM;
+        };
     }
 
     private static void applyDrop(TabPane tabPane, Tab dragged, int dropIndex) {
