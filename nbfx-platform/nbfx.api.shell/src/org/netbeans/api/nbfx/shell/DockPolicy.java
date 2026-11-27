@@ -20,6 +20,13 @@ package org.netbeans.api.nbfx.shell;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import org.netbeans.api.nbfx.content.ContentId;
+import org.netbeans.api.nbfx.content.ContentKind;
+import org.netbeans.api.nbfx.content.DockPlacement;
+import org.netbeans.api.nbfx.content.TransferMode;
+import org.netbeans.api.nbfx.layout.DockGroupId;
 
 /**
  * Evaluates a docking request. Policies are consulted by {@link WindowManager#canDock(DockRequest)};
@@ -37,6 +44,71 @@ public interface DockPolicy {
      * @return the decision, never {@code null}
      */
     DockDecision evaluate(DockRequest request);
+
+    /**
+     * Builds a policy from declarative data. Empty sets are unrestricted. Content-kind and
+     * group-area resolvers may return empty when the requested identity is unknown; structural
+     * validation in {@link WindowManager} remains authoritative for missing identities.
+     *
+     * @param spec the policy specification
+     * @param contentKinds resolves a content id to its kind
+     * @param groupAreas resolves a physical group to its pane role
+     * @return the executable policy
+     * @since 1.16
+     */
+    static DockPolicy fromSpec(DockPolicySpec spec,
+            Function<ContentId, Optional<ContentKind>> contentKinds,
+            Function<DockGroupId, Optional<PaneRole>> groupAreas) {
+        Objects.requireNonNull(spec, "spec");
+        Objects.requireNonNull(contentKinds, "contentKinds");
+        Objects.requireNonNull(groupAreas, "groupAreas");
+        return request -> {
+            if (!spec.acceptedKinds().isEmpty()) {
+                ContentKind kind = resolve(contentKinds, request.content());
+                if (kind == null || !spec.acceptedKinds().contains(kind)) {
+                    return DockDecision.reject("dock.policy.kind");
+                }
+            }
+            PaneRole targetArea = targetArea(request, groupAreas);
+            if (targetArea != null && !spec.acceptedAreas().isEmpty()
+                    && !spec.acceptedAreas().contains(targetArea)) {
+                return DockDecision.reject("dock.policy.area");
+            }
+            if (!spec.placements().isEmpty() && !spec.placements().contains(request.placement())) {
+                return DockDecision.reject("dock.policy.placement");
+            }
+            if (!spec.modes().isEmpty() && !spec.modes().contains(request.mode())) {
+                return DockDecision.reject("dock.policy.mode");
+            }
+            if (!spec.allowCrossArea() && request.sourceGroup() != null && targetArea != null) {
+                PaneRole sourceArea = resolve(groupAreas, request.sourceGroup());
+                if (sourceArea != null && !sourceArea.equals(targetArea)) {
+                    return DockDecision.reject("dock.policy.cross-area");
+                }
+            }
+            if (!spec.allowFloat() && (request.placement() == DockPlacement.FLOAT
+                    || request.placement() == DockPlacement.NEW_WINDOW)) {
+                return DockDecision.reject("dock.policy.float");
+            }
+            return DockDecision.allow(request.placement());
+        };
+    }
+
+    private static PaneRole targetArea(DockRequest request,
+            Function<DockGroupId, Optional<PaneRole>> groupAreas) {
+        if (request.targetArea() != null) {
+            return request.targetArea();
+        }
+        return request.targetGroup() == null ? null : resolve(groupAreas, request.targetGroup());
+    }
+
+    private static <I, T> T resolve(Function<I, Optional<T>> resolver, I id) {
+        if (id == null) {
+            return null;
+        }
+        Optional<T> result = resolver.apply(id);
+        return result == null ? null : result.orElse(null);
+    }
 
     /**
      * Combines policies so every policy must allow the request. The first rejection wins; allowing

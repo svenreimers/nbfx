@@ -667,7 +667,10 @@ public interface DockPolicy {
 }
 ```
 
-Built-in policies are composed from small predicates. Rejections always carry a reason key.
+Built-in policies are composed from small predicates. `DockPolicy.fromSpec(spec, contentKinds,
+groupAreas)` executes declarative specifications with injectable identity resolvers. Empty sets are
+unrestricted; rejections use `dock.policy.kind`, `dock.policy.area`, `dock.policy.placement`,
+`dock.policy.mode`, `dock.policy.cross-area` or `dock.policy.float`.
 
 ### 7.2 Placements
 
@@ -765,7 +768,8 @@ public interface DockWindow {
 }
 ```
 
-A `CUSTOM` window may have no `LayoutNode`; its `WindowContent` owns the scene graph.
+A `CUSTOM` window may have no `LayoutNode`; its `WindowContent` owns the scene graph. `show()`
+brings the window to the front and requests focus.
 
 ```java
 public record WindowId(String namespace, String name) {}
@@ -802,8 +806,18 @@ public record WindowOptions(
         double height,
         boolean resizable,
         boolean rememberBounds,
-        WindowDecoration decoration) {}
+        WindowDecoration decoration,
+        WindowClosePolicy closePolicy) {}
+
+public enum WindowClosePolicy {
+    HIDE,
+    REDOCK,
+    CLOSE_CONTENT
+}
 ```
+
+`REDOCK` is valid for floating shell windows. Custom product windows support `HIDE` and
+`CLOSE_CONTENT`.
 
 ### 8.5 Chrome profiles
 

@@ -18,12 +18,16 @@
  */
 package org.netbeans.api.nbfx.shell;
 
+import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.netbeans.api.nbfx.content.ContentId;
+import org.netbeans.api.nbfx.content.ContentKind;
 import org.netbeans.api.nbfx.content.DockPlacement;
 import org.netbeans.api.nbfx.content.TransferMode;
+import org.netbeans.api.nbfx.layout.DockGroupId;
 
 import static org.junit.Assert.*;
 
@@ -105,6 +109,70 @@ public class DockPolicyTest {
         assertFalse(decision.allowed());
         assertEquals("dock.policy.none", decision.reasonKey());
         assertTrue(DockPolicy.allOf().evaluate(request()).allowed());
+    }
+
+    @Test
+    public void specEvaluatesKindAreaPlacementAndMode() {
+        ContentId content = ContentId.of("nbfx:editor.test");
+        DockGroupId target = DockGroupId.of("nbfx:main");
+        DockRequest request = new DockRequest(content, null, null, target,
+                DockPlacement.INTO_GROUP, TransferMode.COPY, Set.of());
+        DockPolicySpec matching = new DockPolicySpec(Set.of(ContentKind.EDITOR),
+                Set.of(PaneRole.MAIN), Set.of(DockPlacement.INTO_GROUP),
+                Set.of(TransferMode.COPY), true, true);
+        DockPolicy policy = DockPolicy.fromSpec(matching,
+                id -> Optional.of(ContentKind.EDITOR),
+                group -> Optional.of(PaneRole.MAIN));
+        assertTrue(policy.evaluate(request).allowed());
+
+        assertEquals("dock.policy.kind", DockPolicy.fromSpec(matching,
+                id -> Optional.of(ContentKind.VIEW), group -> Optional.of(PaneRole.MAIN))
+                .evaluate(request).reasonKey());
+        assertEquals("dock.policy.area", DockPolicy.fromSpec(matching,
+                id -> Optional.of(ContentKind.EDITOR), group -> Optional.of(PaneRole.NAVIGATOR))
+                .evaluate(request).reasonKey());
+        assertEquals("dock.policy.placement", DockPolicy.fromSpec(matching,
+                id -> Optional.of(ContentKind.EDITOR), group -> Optional.of(PaneRole.MAIN))
+                .evaluate(new DockRequest(content, null, null, target,
+                        DockPlacement.SPLIT_LEFT, TransferMode.COPY, Set.of())).reasonKey());
+        assertEquals("dock.policy.mode", DockPolicy.fromSpec(matching,
+                id -> Optional.of(ContentKind.EDITOR), group -> Optional.of(PaneRole.MAIN))
+                .evaluate(new DockRequest(content, null, null, target,
+                        DockPlacement.INTO_GROUP, TransferMode.MOVE, Set.of())).reasonKey());
+    }
+
+    @Test
+    public void specGatesCrossAreaAndFloating() {
+        DockGroupId source = DockGroupId.of("nbfx:source");
+        ContentId content = ContentId.of("nbfx:view.test");
+        DockRequest crossArea = new DockRequest(content, source, PaneRole.NAVIGATOR, null,
+                DockPlacement.INTO_GROUP, TransferMode.COPY, Set.of());
+        DockPolicySpec cross = new DockPolicySpec(Set.of(), Set.of(), Set.of(), Set.of(),
+                false, true);
+        DockPolicy crossPolicy = DockPolicy.fromSpec(cross, id -> Optional.empty(),
+                group -> Optional.of(PaneRole.MAIN));
+        assertEquals("dock.policy.cross-area", crossPolicy.evaluate(crossArea).reasonKey());
+        assertTrue(DockPolicy.fromSpec(cross, id -> Optional.empty(),
+                group -> Optional.of(PaneRole.NAVIGATOR)).evaluate(crossArea).allowed());
+
+        DockPolicySpec noFloat = new DockPolicySpec(Set.of(), Set.of(), Set.of(), Set.of(),
+                true, false);
+        DockPolicy noFloatPolicy = DockPolicy.fromSpec(noFloat, id -> Optional.empty(),
+                group -> Optional.empty());
+        assertEquals("dock.policy.float", noFloatPolicy.evaluate(new DockRequest(content,
+                null, null, null, DockPlacement.FLOAT, TransferMode.COPY, Set.of())).reasonKey());
+        assertEquals("dock.policy.float", noFloatPolicy.evaluate(new DockRequest(content,
+                null, null, null, DockPlacement.NEW_WINDOW, TransferMode.COPY, Set.of())).reasonKey());
+    }
+
+    @Test
+    public void specCopiesPredicateSets() {
+        Set<ContentKind> kinds = new HashSet<>();
+        kinds.add(ContentKind.EDITOR);
+        DockPolicySpec spec = new DockPolicySpec(kinds, Set.of(), Set.of(), Set.of(), true, true);
+        kinds.add(ContentKind.VIEW);
+        assertEquals(Set.of(ContentKind.EDITOR), spec.acceptedKinds());
+        assertTrue(DockPolicySpec.allowAll().acceptedKinds().isEmpty());
     }
 
     private static DockRequest request() {

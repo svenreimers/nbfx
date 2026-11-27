@@ -44,13 +44,13 @@ public interface DockWindow {
     /** The content hosted by this window. */
     WindowContent content();
 
-    /** Shows the window. */
+    /** Shows, brings to the front and requests focus for the window. */
     void show();
 
     /** Hides the window without closing its content. */
     void hide();
 
-    /** Closes the window using the shell's normal close lifecycle. */
+    /** Closes the window according to its configured {@link WindowClosePolicy}. */
     void close();
 
     /** A snapshot of this window's layout, view tabs and geometry. */

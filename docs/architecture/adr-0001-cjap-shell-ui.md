@@ -299,6 +299,19 @@ api.plugins (T1)        → api.layer, api.resources
   preferences-backed `AppState`. Bounds save on hide/close, restore by stable `WindowId`, override
   constructor defaults, and are clamped to visible screens. Floating editor/view windows continue
   to use the existing detached-pane layout persistence.
+- C3-2s adds `WindowClosePolicy` to `WindowOptions`: HIDE keeps a window/content live, REDOCK moves
+  floating tabs to their home or main pane before closing the stage, and CLOSE_CONTENT preserves
+  the existing close lifecycle. A compatibility constructor keeps CLOSE_CONTENT as the source
+  default. Custom windows reject REDOCK and support HIDE/CLOSE_CONTENT.
+- C3-2t makes keyboard move mode cancel when its window loses focus, in addition to Escape and
+  mouse press. Focus listeners are removed on every end path so a cancelled mover cannot keep
+  intercepting input or retaining the window; cancellation never mutates layout.
+- C3-2u adds immutable `DockPolicySpec` and `DockPolicy.fromSpec` for declarative kind, area,
+  placement, mode, cross-area and float predicates. Identity resolvers are injected, keeping the
+  API independent of concrete managers; empty sets are unrestricted and rejections carry stable
+  reason keys.
+- C3-2v standardizes `DockWindow.show()` as show + to-front + focus request for main, floating and
+  custom windows through one helper, so programmatic window activation matches user expectations.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler
@@ -317,6 +330,11 @@ api.plugins (T1)        → api.layer, api.resources
   notifications. Handler acceptance, legacy file-open success, rejection/no-handler, and missing
   content-host outcomes are announced; internal tab drags and navigator-owned drop targets stay
   silent.
+- C4-3e extracts a neutral `ExternalDrop` payload from JavaFX `DragEvent` before routing. FILES,
+  URIS, TEXT and NODES branches are directly unit-tested without internal `Dragboard` APIs.
+  `FileDragAndDrop.localFilesFrom` now feeds routing for both native file lists and the private
+  internal-navigator format, fixing internal file drags that previously reached only the legacy
+  fallback.
 
 ### 15. Review resolution: custom-shell composition contract
 
