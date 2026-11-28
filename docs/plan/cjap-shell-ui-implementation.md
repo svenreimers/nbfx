@@ -374,6 +374,8 @@ Acceptance: keyboard and pointer split/move/float tests.
 - `WindowKind.MAIN/FLOATING/CUSTOM`.
 - `DockWindow`, `WindowContent`, `WindowOptions`, `WindowClosePolicy`.
 - Geometry, owner, focus, close and persistence.
+- C3-3b adopts restored detached panes into `WindowManager`, preserving kind/tabs/selection/bounds;
+  whole-pane redock is captured as a docked group rather than losing its tabs.
 - Same content instance moves between windows; close policy is REDOCK/CLOSE_CONTENT/HIDE.
 - `FocusController` separates window activation, logical selection and keyboard focus.
 

@@ -904,6 +904,12 @@ profiles and valid hints remain authoritative; unknown ids fall through and malf
 are ignored. State round-trip and MAIN-profile startup selection do not imply complete multi-window
 restore.
 
+C3-3b adopts recreated detached session panes into `DefaultWindowManager`. Restored floating windows
+preserve tabs, selection, bounds and pane kind, and appear in `WindowManager.windows()`. Restoration
+itself creates no undo edit and does not re-run dock policy; later hide/show/close/redock operations use
+the normal manager lifecycle, and redock remains undoable. Restore uses neutral `CLOSE_CONTENT`
+options. Per-window chrome/profile/options and the all-window session schema remain follow-up work.
+
 ## 9. Shell frame and declarative chrome
 
 ### 9.1 `ShellProvider` and `ShellFrame`

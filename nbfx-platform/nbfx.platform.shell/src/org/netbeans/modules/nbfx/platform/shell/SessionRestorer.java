@@ -203,18 +203,30 @@ public final class SessionRestorer {
 
     /**
      * Captures one pane, or {@code null} if it should not be persisted: the sliding panel's pane, a
-     * detached pane that is not (or no longer) in a window, or a detached or docked pane left with no
-     * persistable tab. A minimized pane's tabs include the one slid in.
+     * non-permanent pane with no window or dock/sliding location, or a detached or docked pane left
+     * with no persistable tab. A minimized pane's tabs include the one slid in.
      */
     private static PaneLayout capturePane(TabPane pane) {
         PaneRole role = NbfxTabPane.roleOf(pane);
-        Stage stage = role == PaneRole.DETACHED ? NbfxTabPane.stageOf(pane) : null;
-        if (role == PaneRole.SLIDE || (role == PaneRole.DETACHED && stage == null)) {
+        if (role == PaneRole.SLIDE) {
             // The sliding panel's tab is captured with the group it is on loan from.
             return null;
         }
+        DockArea<TabPane> area = Docking.area();
+        boolean inArea = area != null && area.contains(pane);
         SlidingArea slides = Docking.slides();
         boolean minimized = slides != null && slides.isMinimized(pane);
+        boolean floating = NbfxTabPane.isFloatingPane(pane);
+        Stage stage = floating ? NbfxTabPane.stageOf(pane) : null;
+        if (floating) {
+            // A DOCKED pane floated as a whole is still persisted as a detached window.
+            role = PaneRole.DETACHED;
+        } else if (inArea || minimized) {
+            // Whole-pane redock may retain a detached runtime role; location decides persistence.
+            role = role == PaneRole.DETACHED ? PaneRole.DOCKED : role;
+        } else if (!role.isPermanent()) {
+            return null;
+        }
         List<TabEntry> tabs = new ArrayList<>();
         Tab selected = minimized ? slides.selectedOf(pane) : pane.getSelectionModel().getSelectedItem();
         int activeIndex = -1;
@@ -233,7 +245,8 @@ public final class SessionRestorer {
         }
         if (role == PaneRole.DETACHED) {
             return new PaneLayout(role, stage.getX(), stage.getY(),
-                    stage.getWidth(), stage.getHeight(), tabs, activeIndex);
+                    stage.getWidth(), stage.getHeight(), tabs, activeIndex)
+                    .withKind(NbfxTabPane.kindOf(pane));
         }
         return PaneLayout.docked(role, tabs, activeIndex).withKind(NbfxTabPane.kindOf(pane));
     }
@@ -429,10 +442,7 @@ public final class SessionRestorer {
                 if (tabs.isEmpty()) {
                     continue;
                 }
-                double[] bounds = AppState.clampBounds(pane.x(), pane.y(), pane.width(), pane.height());
-                TabPane detached = NbfxTabPane.openDetachedWindow(tabs,
-                        activeTab(tabs, pane.activeIndex()),
-                        bounds[0], bounds[1], bounds[2], bounds[3]);
+                TabPane detached = restoreDetachedPane(pane, tabs, activeTab(tabs, pane.activeIndex()));
                 if (pane == focusedPane) {
                     focusTarget = detached;
                 }
@@ -484,6 +494,20 @@ public final class SessionRestorer {
         maximizeRecorded(layout, dockedTargets);
         Docking.logLayout("restoring the session");
         return focusTarget;
+    }
+
+    /** Recreates one persisted detached window and adopts it into the installed shell manager. */
+    static TabPane restoreDetachedPane(PaneLayout layout, List<Tab> tabs, Tab active) {
+        double[] bounds = AppState.clampBounds(layout.x(), layout.y(), layout.width(), layout.height());
+        TabPane detached = NbfxTabPane.openDetachedWindow(tabs, active,
+                bounds[0], bounds[1], bounds[2], bounds[3]);
+        if (detached instanceof NbfxTabPane nbfx) {
+            nbfx.setKind(layout.kind());
+            if (Docking.windowManager() instanceof DefaultWindowManager manager) {
+                manager.adoptRestoredFloating(nbfx);
+            }
+        }
+        return detached;
     }
 
     /**

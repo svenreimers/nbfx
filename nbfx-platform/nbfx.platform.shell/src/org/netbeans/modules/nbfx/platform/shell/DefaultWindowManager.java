@@ -31,6 +31,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.net.URL;
 import java.util.logging.Level;
@@ -46,6 +47,7 @@ import org.netbeans.api.nbfx.content.Content;
 import org.netbeans.api.nbfx.content.ContentId;
 import org.netbeans.api.nbfx.content.ContentManager;
 import org.netbeans.api.nbfx.content.DockPlacement;
+import org.netbeans.api.nbfx.editor.EditorDocument;
 import org.netbeans.api.nbfx.layout.DockGroupId;
 import org.netbeans.api.nbfx.resources.ResourceRef;
 import org.netbeans.api.nbfx.shell.DockDecision;
@@ -78,6 +80,7 @@ final class DefaultWindowManager implements WindowManager {
     private final Supplier<Collection<? extends DockPolicy>> policies;
     private final Supplier<WindowState> mainState;
     private final AppState appState;
+    private final Predicate<List<EditorDocument>> closeConfirmation;
     private final Map<NbfxTabPane, FloatingWindow> floating = new LinkedHashMap<>();
     private final Map<WindowId, CustomWindow> custom = new LinkedHashMap<>();
     private final Deque<DockEdit> undoStack = new ArrayDeque<>();
@@ -104,7 +107,12 @@ final class DefaultWindowManager implements WindowManager {
     }
 
     DefaultWindowManager(ContentManager contentManager) {
-        this(contentManager, () -> Lookup.getDefault().lookupAll(DockPolicy.class), () -> null);
+        this(contentManager, CloseConfirmation::confirmClose);
+    }
+
+    DefaultWindowManager(ContentManager contentManager, Predicate<List<EditorDocument>> closeConfirmation) {
+        this(contentManager, () -> Lookup.getDefault().lookupAll(DockPolicy.class), () -> null,
+                null, closeConfirmation);
     }
 
     DefaultWindowManager(ContentManager contentManager, Supplier<Collection<? extends DockPolicy>> policies) {
@@ -118,10 +126,17 @@ final class DefaultWindowManager implements WindowManager {
 
     DefaultWindowManager(ContentManager contentManager, Supplier<Collection<? extends DockPolicy>> policies,
             Supplier<WindowState> mainState, AppState appState) {
+        this(contentManager, policies, mainState, appState, CloseConfirmation::confirmClose);
+    }
+
+    DefaultWindowManager(ContentManager contentManager, Supplier<Collection<? extends DockPolicy>> policies,
+            Supplier<WindowState> mainState, AppState appState,
+            Predicate<List<EditorDocument>> closeConfirmation) {
         this.contentManager = Objects.requireNonNull(contentManager, "contentManager");
         this.policies = Objects.requireNonNull(policies, "policies");
         this.mainState = Objects.requireNonNull(mainState, "mainState");
         this.appState = appState;
+        this.closeConfirmation = Objects.requireNonNull(closeConfirmation, "closeConfirmation");
     }
 
     @Override
@@ -294,6 +309,11 @@ final class DefaultWindowManager implements WindowManager {
             if (current != null && !current.isShowing()) {
                 current.show();
             }
+        }
+        if (state.floating()) {
+            pane.markFloating();
+        } else {
+            pane.markDocked();
         }
     }
 
@@ -840,8 +860,11 @@ final class DefaultWindowManager implements WindowManager {
         DockArea.Anchor<TabPane> anchor = window.anchor();
         if (anchor != null) {
             recordCustomEdit(() -> {
-                NbfxTabPane.closeFloatingPane(window.pane(), true);
+                NbfxTabPane.closeFloatingPane(window.pane(), true, false);
+                window.markClosed();
+                floating.remove(window.pane(), window);
                 Docking.area().reattach(window.pane(), anchor);
+                window.pane().markDocked();
             }, () -> {
                 floatGroupAt(group, options, x, y);
                 return true;
@@ -877,6 +900,7 @@ final class DefaultWindowManager implements WindowManager {
             throw new IllegalArgumentException("Dock group is not in the dock area: " + group);
         }
         DockArea.Anchor<TabPane> anchor = area.detach(nbfx);
+        nbfx.markFloating();
         Consumer<Stage> configure = windowStageConfigurator(checked, x, y);
         NbfxTabPane.showDetachedPane(nbfx, x, y, checked.width(), checked.height(), configure);
         return registerFloating(nbfx, anchor, checked);
@@ -1015,7 +1039,7 @@ final class DefaultWindowManager implements WindowManager {
                 int index = isRelativePlacement(placement) ? base + i : pane.getTabs().size();
                 NbfxTabPane.moveTab(pane, tabs.get(i), index);
             }
-            NbfxTabPane.closeFloatingPane(window.pane(), true);
+            NbfxTabPane.closeFloatingPane(window.pane(), true, false);
             window.markClosed();
             if (window.pane().role() == PaneRole.DETACHED || window.pane().role() == PaneRole.DOCKED) {
                 NbfxTabPane.unregister(window.pane());
@@ -1034,9 +1058,10 @@ final class DefaultWindowManager implements WindowManager {
             if (isSplitPlacement(placement) && (targetPane == null || !area.contains(targetPane))) {
                 return DockResult.rejected(DockDecision.reject("dock.target.missing"));
             }
-            NbfxTabPane.closeFloatingPane(window.pane(), true);
+            NbfxTabPane.closeFloatingPane(window.pane(), true, false);
             window.markClosed();
             area.dockDetached(window.pane(), dropTargetFor(placement, targetPane));
+            window.pane().markDocked();
             floating.remove(window.pane());
             NbfxTabPane.selectTabAndMoveToFront(selected);
             return DockResult.accepted(decision, window.pane().groupId());
@@ -1082,30 +1107,37 @@ final class DefaultWindowManager implements WindowManager {
         redoStack.clear();
     }
 
-    void closeFloatingWindow(FloatingWindow window) {
+    boolean closeFloatingWindow(FloatingWindow window) {
         if (window.owner() != this) {
             throw new IllegalArgumentException("Window belongs to another manager");
         }
+        boolean closed = false;
         switch (window.options().closePolicy()) {
             case HIDE -> window.hide();
-            case REDOCK -> redockFloatingOnClose(window);
+            case REDOCK -> {
+                redockFloatingOnClose(window);
+                closed = !window.stage().isShowing();
+            }
             case CLOSE_CONTENT -> {
-                NbfxTabPane.closeFloatingPane(window.pane(), false);
-                if (!window.stage().isShowing()) {
-                    floating.remove(window.pane(), window);
+                if (closeConfirmation.test(NbfxTabPane.documentsOf(window.pane()))) {
+                    NbfxTabPane.closeFloatingPane(window.pane(), false, false);
+                    closed = !window.stage().isShowing();
                 }
             }
         }
-        if (!window.stage().isShowing()) {
+        if (closed) {
+            window.markClosed();
+            floating.remove(window.pane(), window);
             undoStack.clear();
             redoStack.clear();
         }
+        return closed;
     }
 
     private void redockFloatingOnClose(FloatingWindow window) {
         List<Tab> tabs = List.copyOf(window.pane().getTabs());
         if (tabs.isEmpty()) {
-            NbfxTabPane.closeFloatingPane(window.pane(), true);
+            NbfxTabPane.closeFloatingPane(window.pane(), true, false);
             window.markClosed();
             floating.remove(window.pane());
             return;
@@ -1128,7 +1160,7 @@ final class DefaultWindowManager implements WindowManager {
         }
         Tab selected = window.pane().getSelectionModel().getSelectedItem();
         targets.forEach((tab, target) -> NbfxTabPane.moveTab(target, tab, target.getTabs().size()));
-        NbfxTabPane.closeFloatingPane(window.pane(), true);
+        NbfxTabPane.closeFloatingPane(window.pane(), true, false);
         window.markClosed();
         if (window.pane().role() == PaneRole.DETACHED || window.pane().role() == PaneRole.DOCKED) {
             NbfxTabPane.unregister(window.pane());
@@ -1139,12 +1171,31 @@ final class DefaultWindowManager implements WindowManager {
         }
     }
 
+    /** Adopts a pane recreated by session restore without recording a user gesture. */
+    FloatingWindow adoptRestoredFloating(NbfxTabPane pane) {
+        if (!NbfxTabPane.isFloatingPane(pane)) {
+            throw new IllegalArgumentException("Restored pane is not in a floating window");
+        }
+        Stage stage = NbfxTabPane.stageOf(pane);
+        WindowOptions options = new WindowOptions(WindowKind.FLOATING, null, null, null, null,
+                false, stage.getWidth(), stage.getHeight(), stage.isResizable(), false, null,
+                WindowClosePolicy.CLOSE_CONTENT);
+        FloatingWindow window = registerFloating(pane, null, options);
+        undoStack.clear();
+        redoStack.clear();
+        return window;
+    }
+
     private FloatingWindow registerFloating(NbfxTabPane pane, DockArea.Anchor<TabPane> anchor,
             WindowOptions options) {
+        if (floating.containsKey(pane)) {
+            throw new IllegalStateException("Floating pane is already registered");
+        }
         Stage stage = NbfxTabPane.stageOf(pane);
         if (stage == null) {
             throw new IllegalStateException("Floating pane has no stage");
         }
+        pane.markFloating();
         FloatingWindow window = new FloatingWindow(this, pane, stage, anchor, options);
         floating.put(pane, window);
         stage.addEventFilter(WindowEvent.WINDOW_HIDDEN, _ -> {

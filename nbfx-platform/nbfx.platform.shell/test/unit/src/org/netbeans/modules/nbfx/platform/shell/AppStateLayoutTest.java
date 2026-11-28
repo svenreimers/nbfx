@@ -26,8 +26,11 @@ import org.netbeans.modules.nbfx.platform.shell.AppState.TabEntry;
 import org.netbeans.modules.nbfx.platform.shell.AppState.TabKind;
 import org.netbeans.api.nbfx.views.PaneKind;
 import org.netbeans.modules.nbfx.platform.workspace.DockTrees;
+import org.netbeans.modules.nbfx.test.fx.JavaFxTestSupport;
 import java.util.List;
+import javafx.geometry.Rectangle2D;
 import javafx.geometry.Side;
+import javafx.stage.Screen;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -108,6 +111,51 @@ public class AppStateLayoutTest {
     }
 
     @Test
+    public void editorKindOfADetachedPaneRoundTrips() {
+        PaneLayout pane = new PaneLayout(PaneRole.DETACHED, 100, 200, 640, 480,
+                List.of(EDITOR), 0).withKind(PaneKind.EDITOR);
+
+        PaneLayout read = AppState.parsePane(AppState.serialize(pane));
+
+        assertNotNull(read);
+        assertEquals(PaneKind.EDITOR, read.kind());
+        assertTrue(AppState.serialize(pane).startsWith("DETACHED#EDITOR\t"));
+    }
+
+    @Test
+    public void legacyDetachedEditorLayoutInfersEditorKind() {
+        PaneLayout read = AppState.parsePane(
+                "DETACHED\t100\t200\t640\t480\t0\tEDITOR\r/tmp/A.java\r3\r4\r5");
+
+        assertNotNull(read);
+        assertEquals(PaneKind.EDITOR, read.kind());
+        assertEquals(PaneKind.VIEW, AppState.parsePane(
+                "DETACHED\t100\t200\t640\t480\t0\tVIEW\rprojects\r0\r0\r0").kind());
+        assertEquals(PaneKind.VIEW, AppState.parsePane(
+                "DETACHED\t100\t200\t640\t480\t0\tVIEW\rprojects\r0\r0\r0\tEDITOR\r/tmp/A.java\r3\r4\r5").kind());
+    }
+
+    @Test
+    public void invalidDetachedBoundsFallBackToFiniteDefaults() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            double[] bounds = AppState.clampBounds(Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY,
+                    Double.POSITIVE_INFINITY, Double.NaN);
+
+            assertTrue(Double.isFinite(bounds[0]));
+            assertTrue(Double.isFinite(bounds[1]));
+            assertTrue(bounds[2] > 0 && Double.isFinite(bounds[2]));
+            assertTrue(bounds[3] > 0 && Double.isFinite(bounds[3]));
+            assertTrue(AppState.isVisibleOnAnyScreen(bounds[0], bounds[1], bounds[2], bounds[3]));
+
+            double[] extreme = AppState.clampBounds(0, 0, Double.MAX_VALUE, Double.MAX_VALUE);
+            Rectangle2D union = screenUnion();
+            assertTrue(extreme[2] <= union.getWidth());
+            assertTrue(extreme[3] <= union.getHeight());
+            return null;
+        });
+    }
+
+    @Test
     public void anchorNextToARowOfPanesRoundTrips() {
         PaneLayout pane = PaneLayout.docked(PaneRole.DOCKED, List.of(PROJECTS), 0)
                 .withMinimized(new Minimized(Side.BOTTOM, 180, 2, Side.BOTTOM, 0.35, Minimized.NO_ANCHOR, 1));
@@ -177,5 +225,22 @@ public class AppStateLayoutTest {
         assertEquals("anchored next to the first minimized pane, which moved up one pane", 2,
                 minimized.get(2).minimized().anchorPane());
         assertEquals(2, pruned.dockedPanes().size());
+    }
+
+    private static Rectangle2D screenUnion() {
+        Rectangle2D union = null;
+        for (Screen screen : Screen.getScreens()) {
+            Rectangle2D bounds = screen.getVisualBounds();
+            if (union == null) {
+                union = bounds;
+            } else {
+                double minX = Math.min(union.getMinX(), bounds.getMinX());
+                double minY = Math.min(union.getMinY(), bounds.getMinY());
+                double maxX = Math.max(union.getMaxX(), bounds.getMaxX());
+                double maxY = Math.max(union.getMaxY(), bounds.getMaxY());
+                union = new Rectangle2D(minX, minY, maxX - minX, maxY - minY);
+            }
+        }
+        return union == null ? Screen.getPrimary().getVisualBounds() : union;
     }
 }

@@ -318,6 +318,23 @@ public final class AppState {
         return false;
     }
 
+    private static Rectangle2D screenUnion() {
+        Rectangle2D union = null;
+        for (Screen screen : Screen.getScreens()) {
+            Rectangle2D bounds = screen.getVisualBounds();
+            union = union == null ? bounds : union(union, bounds);
+        }
+        return union == null ? Screen.getPrimary().getVisualBounds() : union;
+    }
+
+    private static Rectangle2D union(Rectangle2D first, Rectangle2D second) {
+        double minX = Math.min(first.getMinX(), second.getMinX());
+        double minY = Math.min(first.getMinY(), second.getMinY());
+        double maxX = Math.max(first.getMaxX(), second.getMaxX());
+        double maxY = Math.max(first.getMaxY(), second.getMaxY());
+        return new Rectangle2D(minX, minY, maxX - minX, maxY - minY);
+    }
+
     private void flush() {
         try {
             prefs.flush();
@@ -800,8 +817,8 @@ public final class AppState {
     }
 
     /**
-     * One line per pane: the role - followed by {@code #EDITOR} for a docked editor pane, and, for a
-     * minimized pane, by {@code @side@size@anchorLeaf@anchorSide@share@anchorPane@anchorFar} - then
+     * One line per pane: the role - followed by {@code #EDITOR} for a non-default editor pane kind,
+     * and, for a minimized pane, by {@code @side@size@anchorLeaf@anchorSide@share@anchorPane@anchorFar} - then
      * the bounds, the active index and the tabs, tab-separated.
      */
     static String serialize(PaneLayout pane) {
@@ -867,6 +884,12 @@ public final class AppState {
             if (tab != null) {
                 tabs.add(tab);
             }
+        }
+        if (kind == null && role == PaneRole.DETACHED && !tabs.isEmpty()
+                && tabs.stream().allMatch(tab -> tab.kind() == TabKind.EDITOR)) {
+            // Older capture code omitted detached kind. Infer editor behavior only for an
+            // all-editor group; mixed legacy groups conservatively retain their view default.
+            kind = PaneKind.EDITOR;
         }
         int active = Math.min(parseInt(f, 5), tabs.size() - 1);
         if (tabs.isEmpty() && !role.isPermanent()) {
@@ -957,14 +980,23 @@ public final class AppState {
 
     // --- Detached-window geometry ------------------------------------------
 
-    /** Returns valid {@code {x, y, width, height}}, centering on the primary screen if off-screen. */
+    /** Returns valid {@code {x, y, width, height}}, centering on an attached screen if off-screen. */
     static double[] clampBounds(double x, double y, double width, double height) {
-        double w = width > 0 ? width : DEFAULT_DETACHED_WIDTH;
-        double h = height > 0 ? height : DEFAULT_DETACHED_HEIGHT;
-        if (Double.isNaN(x) || Double.isNaN(y) || !isVisibleOnAnyScreen(x, y, w, h)) {
-            Rectangle2D vb = Screen.getPrimary().getVisualBounds();
+        Rectangle2D vb = screenUnion();
+        double maxWidth = Math.max(1, vb.getWidth());
+        double maxHeight = Math.max(1, vb.getHeight());
+        double w = Double.isFinite(width) && width > 0
+                ? Math.min(width, maxWidth) : Math.min(DEFAULT_DETACHED_WIDTH, maxWidth);
+        double h = Double.isFinite(height) && height > 0
+                ? Math.min(height, maxHeight) : Math.min(DEFAULT_DETACHED_HEIGHT, maxHeight);
+        if (!Double.isFinite(x) || !Double.isFinite(y) || !isVisibleOnAnyScreen(x, y, w, h)) {
             x = vb.getMinX() + (vb.getWidth() - w) / 2;
             y = vb.getMinY() + (vb.getHeight() - h) / 2;
+            if (!isVisibleOnAnyScreen(x, y, w, h)) {
+                Rectangle2D fallback = Screen.getPrimary().getVisualBounds();
+                x = fallback.getMinX() + (fallback.getWidth() - w) / 2;
+                y = fallback.getMinY() + (fallback.getHeight() - h) / 2;
+            }
         }
         return new double[]{x, y, w, h};
     }

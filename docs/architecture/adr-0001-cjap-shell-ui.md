@@ -378,8 +378,17 @@ api.plugins (T1)        → api.layer, api.resources
   read before profile publication and frame/provider creation. Startup precedence is explicit profile,
   valid startup hint, valid restored profile, product default/fallback, then neutral fallback. Unknown
   ids fall through; malformed persisted tokens are ignored and logged. This closes the C2-6c
-  MAIN-profile startup loop without
-  claiming complete multi-window/session restoration.
+  MAIN-profile startup loop without claiming complete multi-window/session restoration.
+- C3-3b adopts recreated detached session panes into `DefaultWindowManager` as floating windows.
+  Restore preserves tabs, selection, bounds and pane kind, then registers a neutral `CLOSE_CONTENT`
+  handle without policy re-evaluation or undo edits. Public handle close uses the normal unsaved-editor
+  confirmation exactly once, including hidden windows, and publishes normal view/editor close lifecycles
+  plus the surviving active-component context. Whole-pane float/redock normalizes the pane role in
+  both directions; capture classifies floating/minimized/docked panes by location, preventing tab loss
+  after redock or minimize.
+  Legacy detached editor layouts infer editor kind, and invalid/extreme bounds are clamped to finite
+  on-screen geometry. Per-window profile/decoration/option persistence and the versioned all-window
+  session schema remain follow-up work.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

@@ -142,13 +142,14 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
     private static final String FLOATING_WINDOW = "nbfx.floatingWindow";
     private static final String CLOSING_WINDOW = "nbfx.closingWindow";
     private static final String CLOSE_CLEANUP_KEY = "nbfx.closeCleanup";
+    private static final String CLOSING_PANE = "nbfx.closingPane";
 
     /** Key under which a view tab stores its stable {@code ViewProvider} identifier for persistence. */
     private static final String VIEW_ID_KEY = "nbfx.viewId";
     /** Key under which a view tab stores the provider that created it, for dynamic-view cleanup. */
     static final String VIEW_PROVIDER_KEY = "nbfx.viewProvider";
-    /** Key marking a view tab whose close has already been published once. */
-    private static final String VIEW_CLOSED_KEY = "nbfx.viewClosed";
+    /** Key marking a tab whose close has already been published once. */
+    private static final String TAB_CLOSED_KEY = "nbfx.tabClosed";
 
     private static final String STYLESHEET = Objects.requireNonNull(
             NbfxTabPane.class.getResource("/org/netbeans/modules/nbfx/platform/shell/styles.css")).toExternalForm();
@@ -251,7 +252,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
 
     private static final java.util.concurrent.atomic.AtomicInteger GROUP_SEQ = new java.util.concurrent.atomic.AtomicInteger();
 
-    private final PaneRole role;
+    private PaneRole role;
     private final DockGroupId groupId;
     private PaneKind kind;
     /**
@@ -375,6 +376,22 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
     @Override
     public PaneRole role() {
         return role;
+    }
+
+    /** Reclassifies a docked pane when it floats without changing its group identity. */
+    void markFloating() {
+        if (role == PaneRole.DOCKED) {
+            role = PaneRole.DETACHED;
+            updateHeaderButton();
+        }
+    }
+
+    /** Reclassifies a detached pane after whole-pane redock without changing its group identity. */
+    void markDocked() {
+        if (role == PaneRole.DETACHED) {
+            role = PaneRole.DOCKED;
+            updateHeaderButton();
+        }
     }
 
     /** The stable dock group identity of this pane. */
@@ -814,6 +831,9 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         // The active component (and, for an editor, the active document) is published by the shell
         // from the focused pane's selected tab; a navigator tab keeps the last editor active.
         tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, selectedTab) -> {
+            if (Boolean.TRUE.equals(tabPane.getProperties().get(CLOSING_PANE))) {
+                return;
+            }
             setComponentPane(tabPane);
             notifyActiveTabChanged();
             notifyActivePaneChanged(tabPane);
@@ -1063,10 +1083,10 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
     }
 
     private static void unregisterIfClosed(Tab tab) {
-        if (isTabAttached(tab) || Boolean.TRUE.equals(tab.getProperties().get(VIEW_CLOSED_KEY))) {
+        if (isTabAttached(tab) || Boolean.TRUE.equals(tab.getProperties().get(TAB_CLOSED_KEY))) {
             return;
         }
-        tab.getProperties().put(VIEW_CLOSED_KEY, Boolean.TRUE);
+        tab.getProperties().put(TAB_CLOSED_KEY, Boolean.TRUE);
         String viewId = viewId(tab);
         boolean notified = false;
         if (viewId != null) {
@@ -1739,12 +1759,14 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         }
         if (preserveContent) {
             stage.getProperties().put(PRESERVE_CONTENT_ON_HIDE, Boolean.TRUE);
-            stage.setOnCloseRequest(null);
         }
+        // Programmatic close has already run the manager's policy/confirmation path.
+        stage.setOnCloseRequest(null);
         stage.getProperties().put(CLOSING_WINDOW, Boolean.TRUE);
         if (!stage.isShowing() && !showIfHidden
                 && stage.getProperties().get(CLOSE_CLEANUP_KEY) instanceof Runnable cleanup) {
             cleanup.run();
+            stage.close();
         } else {
             // A Stage that is already hidden does not emit WINDOW_HIDDEN when closed. Re-show it
             // synchronously so close cleanup and public-handle invalidation always run.
@@ -1753,7 +1775,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             }
             stage.close();
         }
-        if (preserveContent && stage.getScene() != null) {
+        if (stage.getScene() != null) {
             stage.setScene(null);
         }
     }
@@ -2067,19 +2089,17 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             boolean preserveContent = Boolean.TRUE.equals(
                     stage.getProperties().get(PRESERVE_CONTENT_ON_HIDE));
             stage.getProperties().remove(PRESERVE_CONTENT_ON_HIDE);
+            TabPane componentBefore = componentPane;
+            List<Tab> closingTabs = List.of();
             if (!preserveContent) {
+                closingTabs = List.copyOf(newPane.getTabs());
+                newPane.getProperties().put(CLOSING_PANE, Boolean.TRUE);
+                newPane.getTabs().clear();
+                newPane.getProperties().remove(CLOSING_PANE);
                 DockArea<TabPane> area = Docking.area();
                 boolean primary = area != null && area.isPrimary(newPane);
                 if (!primary) {
-                    TAB_PANES.remove(newPane);
-                }
-                PANES_PENDING_CLOSE.remove(newPane);
-                if (lastFocusedPane == newPane) {
-                    // Don't keep a closed window (and its scene graph) alive through the focus tracking.
-                    lastFocusedPane = null;
-                }
-                if (activePane == newPane) {
-                    activePane = null;
+                    unregister(newPane);
                 }
             }
             // This window's scoped commands observe documents that outlive it, so detach them.
@@ -2088,12 +2108,17 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             if (bars instanceof DisposableChrome chrome) {
                 chrome.dispose();
             }
-            // The window closed with tabs still in it (Save/Discard on close): those tabs are
-            // gone now, so unregister their documents. Redock flows set preserveContent after
-            // moving the pane or its tabs back into the main window.
-            EditorContext context = editorContext();
-            if (!preserveContent && context != null) {
-                documentsOf(newPane).forEach(context::unregister);
+            // Use the same idempotent tab-close lifecycle as closing a tab in a pane. Redock flows
+            // preserve content after moving the tabs, so only real window close publishes closes.
+            closingTabs.forEach(NbfxTabPane::unregisterIfClosed);
+            if (!preserveContent) {
+                TabPane restored = componentBefore != newPane && TAB_PANES.contains(componentBefore)
+                        ? componentBefore : componentPane;
+                boolean changed = setComponentPane(restored);
+                if (componentBefore == newPane || changed) {
+                    notifyActiveTabChanged();
+                    notifyActivePaneChanged(restored);
+                }
             }
         };
         stage.getProperties().put(CLOSE_CLEANUP_KEY, cleanup);
