@@ -459,17 +459,26 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public DockWindow floatContent(ContentId content, WindowOptions options) {
+        WindowOptions checked = requireFloatingOptions(options);
+        return floatContentRecorded(content, checked, defaultFloatingX(checked), defaultFloatingY(checked));
+    }
+
+    DockWindow floatContentAtForGesture(ContentId content, double x, double y) {
+        return floatContentRecorded(content, defaultFloatingOptions(), x, y);
+    }
+
+    private DockWindow floatContentRecorded(ContentId content, WindowOptions options, double x, double y) {
         Location before = location(content);
         Tab sourceTab = findTab(content).orElse(null);
         boolean alreadyFloating = sourceTab != null && sourceTab.getTabPane() instanceof NbfxTabPane source
                 && NbfxTabPane.isFloatingPane(source);
-        DockWindow window = floatContentWindow(content, options);
+        DockWindow window = floatContentAt(content, options, x, y);
         if (alreadyFloating) {
             return window;
         }
         if (before != null && paneForGroup(before.group()) != null) {
             recordEdit(content, before, before.selected(), () -> {
-                floatContentWindow(content, options);
+                floatContentAt(content, options, x, y);
                 return true;
             });
         } else {
@@ -477,12 +486,6 @@ final class DefaultWindowManager implements WindowManager {
             redoStack.clear();
         }
         return window;
-    }
-
-    private FloatingWindow floatContentWindow(ContentId content, WindowOptions options) {
-        Objects.requireNonNull(content, "content");
-        WindowOptions checked = requireFloatingOptions(options);
-        return floatContentAt(content, checked, defaultFloatingX(checked), defaultFloatingY(checked));
     }
 
     private FloatingWindow floatContentAt(ContentId content, WindowOptions options, double x, double y) {

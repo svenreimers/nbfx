@@ -331,6 +331,10 @@ api.plugins (T1)        → api.layer, api.resources
   source group survives. Undo moves the tab back to its source index; redo floats it again with
   the same options. Whole-group float, pointer detach and redock still invalidate history until
   their pane/window inverse is represented explicitly.
+- C3-2ab routes pointer/context-menu tab detach through a package-private recorded float entry
+  point, preserving screen coordinates and default window options while gaining the same undo
+  edit. Unresolved content or runtimes without a manager retain direct detach; whole-group float
+  and redock remain history-invalidating.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

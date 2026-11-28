@@ -1653,7 +1653,13 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
 
     /** Moves {@code tab} into a new detached window whose top-left corner is at screen {@code (x, y)}. */
     static void detachTabToWindowAt(Tab tab, double x, double y) {
-        floatTab(tab, x, y, DETACHED_WIDTH, DETACHED_HEIGHT);
+        Optional<org.netbeans.api.nbfx.content.ContentId> content = contentIdForTab(tab);
+        WindowManager manager = Docking.windowManager();
+        if (manager instanceof DefaultWindowManager defaultManager && content.isPresent()) {
+            defaultManager.floatContentAtForGesture(content.get(), x, y);
+        } else {
+            floatTab(tab, x, y, DETACHED_WIDTH, DETACHED_HEIGHT);
+        }
     }
 
     /**

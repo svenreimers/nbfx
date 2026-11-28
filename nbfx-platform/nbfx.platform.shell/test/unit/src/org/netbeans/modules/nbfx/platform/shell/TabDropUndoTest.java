@@ -86,6 +86,48 @@ public class TabDropUndoTest {
     }
 
     @Test
+    public void pointerDetachRecordsUndoAndKeepsDropPosition() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = null;
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                manager = new DefaultWindowManager(contentManager);
+                Docking.runtime().setWindowManager(manager);
+                ViewContent content = new ViewContent(new FakeView("pointer.float", "Float"));
+                contentManager.open(content);
+                Tab tab = new Tab("Float");
+                NbfxTabPane.setViewId(tab, "pointer.float");
+                NbfxTabPane.attachTab(main, tab);
+
+                NbfxTabPane.detachTabToWindowAt(tab, 10, 20);
+                assertTrue(!manager.groupOf(content.id()).orElseThrow().equals(main.groupId()));
+                assertEquals(10, manager.windows().getFirst().window().getX(), 0.001);
+                assertEquals(20, manager.windows().getFirst().window().getY(), 0.001);
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertEquals(main.groupId(), manager.groupOf(content.id()).orElseThrow());
+            } finally {
+                if (manager != null) {
+                    manager.windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void samePaneDropAtCurrentPositionDoesNotCreateEdit() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
