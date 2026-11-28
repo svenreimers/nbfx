@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import javafx.geometry.Side;
 import javafx.scene.Node;
 import javafx.scene.control.Tab;
 import javafx.scene.layout.Pane;
@@ -37,6 +38,7 @@ import org.netbeans.api.nbfx.shell.WindowOptions;
 import org.netbeans.api.nbfx.view.ViewProvider;
 import org.netbeans.api.nbfx.views.ViewContent;
 import org.netbeans.modules.nbfx.platform.content.DefaultContentManager;
+import org.netbeans.modules.nbfx.platform.workspace.DropTarget;
 import org.netbeans.modules.nbfx.test.fx.JavaFxTestSupport;
 
 import static org.junit.Assert.*;
@@ -383,6 +385,49 @@ public class DockUndoTest {
                 if (manager != null) {
                     manager.windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
                 }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void paneRelocationUndoRestoresCurrentAnchor() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.pane.move", "Pane"));
+                contentManager.open(content);
+                Tab tab = new Tab("Pane");
+                NbfxTabPane.setViewId(tab, "undo.pane.move");
+                NbfxTabPane.attachTab(navigator, tab);
+                String before = org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree());
+
+                assertTrue(manager.movePaneForGesture(navigator.groupId(),
+                        new DropTarget<>(main, Side.RIGHT)));
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertEquals(before, org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree()));
+                assertSame(navigator, Docking.area().primary(PaneRole.NAVIGATOR.name()));
+                manager.redo();
+                assertTrue(!before.equals(org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree())));
+                assertSame(navigator, Docking.area().primary(PaneRole.NAVIGATOR.name()));
+            } finally {
                 NbfxTabPane.unregister(main);
                 NbfxTabPane.unregister(navigator);
                 DockRuntime runtime = Docking.runtime();

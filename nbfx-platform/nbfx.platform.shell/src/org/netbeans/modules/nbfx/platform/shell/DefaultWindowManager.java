@@ -200,6 +200,31 @@ final class DefaultWindowManager implements WindowManager {
         return true;
     }
 
+    boolean movePaneForGesture(DockGroupId group, DropTarget<TabPane> target) {
+        TabPane pane = paneForGroup(group);
+        DockArea<TabPane> area = Docking.area();
+        if (!(pane instanceof NbfxTabPane) || area == null || !area.contains(pane)
+                || pane == area.mainPane() || target == null || target.pane() == pane) {
+            return false;
+        }
+        DockArea.Anchor<TabPane> anchor = area.currentAnchor(pane);
+        if (anchor == null) {
+            return false;
+        }
+        ContentId selected = NbfxTabPane.contentIdForTab(
+                pane.getSelectionModel().getSelectedItem()).orElse(null);
+        area.relocate(pane, target);
+        recordCustomEdit(() -> {
+            area.detach(pane);
+            area.reattach(pane, anchor);
+        }, () -> {
+            area.relocate(pane, target);
+            return true;
+        }, selected, () -> Docking.area() == area && paneForGroup(group) != null,
+            () -> Docking.area() == area && paneForGroup(group) != null);
+        return true;
+    }
+
     @Override
     public void attach(ContentId content, DockGroupId group, int index) {
         Location before = location(content);

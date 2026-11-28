@@ -919,6 +919,20 @@ public final class DockArea<N extends Node> extends StackPane {
     }
 
     /**
+     * Returns where {@code pane} currently sits without removing it, or {@code null} for the main
+     * pane, the only pane, or a pane outside this area. Used to record the inverse of a relocation.
+     *
+     * @param pane the pane to inspect
+     * @return its current position anchor, or {@code null}
+     */
+    public Anchor<N> currentAnchor(N pane) {
+        if (pane == null || pane == mainPane() || !contains(pane) || pane == root) {
+            return null;
+        }
+        return anchorFor(pane);
+    }
+
+    /**
      * Reattaches a pane removed by {@link #detach(Node)} at its former anchor, preserving identity,
      * content, split position and share. A {@code null} anchor uses the pane's default side.
      *

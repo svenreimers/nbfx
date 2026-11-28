@@ -350,6 +350,10 @@ api.plugins (T1)        → api.layer, api.resources
   pane and tab instances, re-registers the pane on undo, moves the tabs back in original order,
   recreates its stage at the prior geometry, and reuses the same request for redo. Closed/missing
   tabs make the edit inapplicable rather than partially restoring it.
+- C3-2ag adds `DockArea.currentAnchor` and records non-main pane split/relocation as a custom edit.
+  Keyboard pane moves use the manager when possible; undo detaches the pane from its new location
+  and reattaches it at the captured original anchor, while redo repeats the relocation. Main-pane
+  and detached-pane moves keep the direct path.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

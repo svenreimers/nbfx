@@ -161,16 +161,25 @@ final class TabMover {
                 if (!movePaneJoinWithManager(pane, candidate.pane())) {
                     moveAll(pane, candidate.pane());
                 }
-            } else if (area.contains(pane)) {
-                area.relocate(pane, candidate.target());
-            } else {
-                // A detached window's pane: its tabs join a new pane of the area, and the window closes.
-                moveAll(pane, area.split(candidate.target()));
+            } else if (!movePaneWithManager(pane, candidate.target())) {
+                if (area.contains(pane)) {
+                    area.relocate(pane, candidate.target());
+                } else {
+                    // A detached window's pane: its tabs join a new pane of the area, and the window closes.
+                    moveAll(pane, area.split(candidate.target()));
+                }
             }
             if (selected != null) {
                 NbfxTabPane.selectTabAndMoveToFront(selected);
             }
         });
+    }
+
+    private static boolean movePaneWithManager(TabPane source, DropTarget<TabPane> target) {
+        WindowManager manager = Docking.windowManager();
+        return manager instanceof DefaultWindowManager defaultManager
+                && source instanceof NbfxTabPane nbfx
+                && defaultManager.movePaneForGesture(nbfx.groupId(), target);
     }
 
     private static boolean movePaneJoinWithManager(TabPane source, TabPane target) {

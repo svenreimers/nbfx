@@ -635,6 +635,10 @@ public class DockAreaTest {
             StackPane docked = f.area.split(f.main, Side.RIGHT);
             docked.getChildren().add(new Region());
             String before = DockTrees.format(f.area.tree());
+            Anchor<StackPane> current = f.area.currentAnchor(docked);
+            assertSame(f.main, current.leaf());
+            assertEquals(Side.RIGHT, current.side());
+            assertEquals(0.35, current.share(), 0.001);
 
             Anchor<StackPane> anchor = f.area.detach(docked);
             f.area.reattach(docked, anchor);
