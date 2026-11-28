@@ -141,6 +141,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
     private static final String PRESERVE_CONTENT_ON_HIDE = "nbfx.preserveContentOnHide";
     private static final String FLOATING_WINDOW = "nbfx.floatingWindow";
     private static final String CLOSING_WINDOW = "nbfx.closingWindow";
+    private static final String CLOSE_CLEANUP_KEY = "nbfx.closeCleanup";
 
     /** Key under which a view tab stores its stable {@code ViewProvider} identifier for persistence. */
     private static final String VIEW_ID_KEY = "nbfx.viewId";
@@ -1387,18 +1388,9 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             return Optional.of(org.netbeans.api.nbfx.content.ContentId.of("nbfx:view." + viewId));
         }
         EditorDocument doc = documentOf(tab);
-        if (doc != null) {
-            org.netbeans.api.nbfx.content.ContentManager cm =
-                    Lookup.getDefault().lookup(org.netbeans.api.nbfx.content.ContentManager.class);
-            if (cm != null) {
-                for (org.netbeans.api.nbfx.content.Content content : cm.openContent()) {
-                    if (content instanceof EditorContent ec && doc.equals(ec.document())) {
-                        return Optional.of(content.id());
-                    }
-                }
-            }
-        }
-        return Optional.empty();
+        // EditorContent owns the stable per-document identity. Do not resolve it through the global
+        // lookup: the shell's content manager is per-shell and is not published there.
+        return doc == null ? Optional.empty() : Optional.of(new EditorContent(doc).id());
     }
 
     private static TransferMode[] toFxTransferMode(org.netbeans.api.nbfx.content.TransferMode mode) {
@@ -1737,6 +1729,10 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
     }
 
     static void closeFloatingPane(NbfxTabPane pane, boolean preserveContent) {
+        closeFloatingPane(pane, preserveContent, true);
+    }
+
+    static void closeFloatingPane(NbfxTabPane pane, boolean preserveContent, boolean showIfHidden) {
         Stage stage = stageOf(pane);
         if (!isFloatingPane(pane)) {
             return;
@@ -1745,13 +1741,18 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             stage.getProperties().put(PRESERVE_CONTENT_ON_HIDE, Boolean.TRUE);
             stage.setOnCloseRequest(null);
         }
-        // A Stage that is already hidden does not emit WINDOW_HIDDEN when closed. Re-show it
-        // synchronously so close cleanup and public-handle invalidation always run.
-        if (!stage.isShowing()) {
-            stage.show();
-        }
         stage.getProperties().put(CLOSING_WINDOW, Boolean.TRUE);
-        stage.close();
+        if (!stage.isShowing() && !showIfHidden
+                && stage.getProperties().get(CLOSE_CLEANUP_KEY) instanceof Runnable cleanup) {
+            cleanup.run();
+        } else {
+            // A Stage that is already hidden does not emit WINDOW_HIDDEN when closed. Re-show it
+            // synchronously so close cleanup and public-handle invalidation always run.
+            if (!stage.isShowing()) {
+                stage.show();
+            }
+            stage.close();
+        }
         if (preserveContent && stage.getScene() != null) {
             stage.setScene(null);
         }
@@ -2057,7 +2058,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
                 Platform.runLater(() -> closeDetachedStageIfEmpty(newPane));
             }
         });
-        Objects.requireNonNull(stage).setOnHidden(_ -> {
+        Runnable cleanup = () -> {
             boolean closing = Boolean.TRUE.equals(stage.getProperties().get(CLOSING_WINDOW));
             stage.getProperties().remove(CLOSING_WINDOW);
             if (!closing) {
@@ -2094,7 +2095,9 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             if (!preserveContent && context != null) {
                 documentsOf(newPane).forEach(context::unregister);
             }
-        });
+        };
+        stage.getProperties().put(CLOSE_CLEANUP_KEY, cleanup);
+        stage.setOnHidden(_ -> cleanup.run());
     }
 
     /**

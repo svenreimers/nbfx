@@ -23,8 +23,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import javafx.geometry.Side;
 import javafx.scene.Node;
+import javafx.stage.WindowEvent;
 import javafx.scene.control.Tab;
 import javafx.scene.layout.Pane;
 import org.junit.Test;
@@ -33,6 +36,7 @@ import org.netbeans.api.nbfx.content.TransferMode;
 import org.netbeans.api.nbfx.layout.DockGroupId;
 import org.netbeans.api.nbfx.shell.DockDecision;
 import org.netbeans.api.nbfx.shell.DockRequest;
+import org.netbeans.api.nbfx.shell.DockResult;
 import org.netbeans.api.nbfx.shell.PaneRole;
 import org.netbeans.api.nbfx.shell.WindowOptions;
 import org.netbeans.api.nbfx.view.ViewProvider;
@@ -146,6 +150,61 @@ public class DockUndoTest {
     }
 
     @Test
+    public void groupMoveWithoutStableIdentityDoesNotMutate() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane other = new NbfxTabPane(PaneRole.NAVIGATOR);
+            try {
+                DefaultWindowManager manager = new DefaultWindowManager(new DefaultContentManager());
+                Tab tab = new Tab("No identity");
+                NbfxTabPane.attachTab(main, tab);
+
+                assertEquals(DefaultWindowManager.GroupMoveResult.UNAVAILABLE,
+                        manager.moveGroupForGesture(main.groupId(), other.groupId(), -1));
+                assertEquals(List.of(tab), main.getTabs());
+                assertTrue(other.getTabs().isEmpty());
+                assertFalse(manager.canUndo());
+            } finally {
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(other);
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void nonRestorableGroupMoveIsRejectedWithoutMutation() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane source = new NbfxTabPane(PaneRole.DOCKED);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            try {
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.group.rejected", "Rejected"));
+                contentManager.open(content);
+                Tab tab = new Tab("Rejected");
+                NbfxTabPane.setViewId(tab, "undo.group.rejected");
+                NbfxTabPane.attachTab(source, tab);
+
+                assertEquals(DefaultWindowManager.GroupMoveResult.REJECTED,
+                        manager.moveGroupForGesture(source.groupId(), main.groupId(), -1));
+                assertEquals(List.of(tab), source.getTabs());
+                assertTrue(main.getTabs().isEmpty());
+                DockRequest request = new DockRequest(content.id(), source.groupId(), null,
+                        main.groupId(), DockPlacement.INTO_GROUP, TransferMode.MOVE, Set.of());
+                assertEquals("dock.source.unrestorable", manager.canDock(request).reasonKey());
+                assertEquals("dock.source.unrestorable", manager.dock(request).decision().reasonKey());
+                assertEquals(List.of(tab), source.getTabs());
+                assertFalse(manager.canUndo());
+            } finally {
+                NbfxTabPane.unregister(source);
+                NbfxTabPane.unregister(main);
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void groupMoveIsOneUndoableGesture() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
@@ -174,9 +233,18 @@ public class DockUndoTest {
                 manager.undo();
                 assertEquals(List.of(firstTab, secondTab), main.getTabs());
                 assertTrue(other.getTabs().isEmpty());
+                ViewContent third = new ViewContent(new FakeView("undo.group.third", "Third"));
+                contentManager.open(third);
+                Tab thirdTab = new Tab("Third");
+                NbfxTabPane.setViewId(thirdTab, "undo.group.third");
+                NbfxTabPane.attachTab(main, thirdTab);
                 manager.redo();
                 assertEquals(List.of(firstTab, secondTab), other.getTabs());
+                assertEquals(List.of(thirdTab), main.getTabs());
                 assertEquals(secondTab, other.getSelectionModel().getSelectedItem());
+                manager.undo();
+                assertEquals(List.of(firstTab, secondTab, thirdTab), main.getTabs());
+                assertTrue(other.getTabs().isEmpty());
             } finally {
                 NbfxTabPane.unregister(main);
                 NbfxTabPane.unregister(other);
@@ -187,6 +255,389 @@ public class DockUndoTest {
             }
             return null;
         });
+    }
+
+    @Test
+    public void rootDockedGroupUndoRestoresRootOnlyLayoutAfterDisposal() throws InterruptedException {
+        AtomicReference<RootGroupFixture> fixtureRef = new AtomicReference<>();
+        try {
+            JavaFxTestSupport.onFx(() -> {
+                NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+                DefaultContentManager contentManager = new DefaultContentManager();
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                Docking.runtime().completeStartupLayout();
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.root.group", "Root"));
+                contentManager.open(content);
+                Tab tab = new Tab("Root");
+                NbfxTabPane.setViewId(tab, "undo.root.group");
+                NbfxTabPane root = (NbfxTabPane) Docking.area().applyTree(
+                        org.netbeans.modules.nbfx.platform.workspace.DockTrees.parse("L")).getFirst();
+                NbfxTabPane.attachTab(root, tab);
+                fixtureRef.set(new RootGroupFixture(manager, main, tab, root));
+                assertTrue(Docking.area().isRootPane(root));
+
+                assertEquals(DefaultWindowManager.GroupMoveResult.MOVED,
+                        manager.moveGroupForGesture(root.groupId(), main.groupId(), -1));
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertTrue(Docking.area().isRootPane(root));
+                assertEquals(List.of(tab), root.getTabs());
+                assertTrue(manager.canRedo());
+                manager.redo();
+                return null;
+            });
+            JavaFxTestSupport.onFx(() -> {
+                RootGroupFixture f = fixtureRef.get();
+                assertFalse(NbfxTabPane.tabPanes().contains(f.root()));
+                assertTrue(f.manager().canUndo());
+                f.manager().undo();
+                assertTrue(Docking.area().isRootPane(f.root()));
+                assertEquals(List.of(f.root()), Docking.area().leaves());
+                assertEquals(List.of(f.tab()), f.root().getTabs());
+                return null;
+            });
+        } finally {
+            JavaFxTestSupport.onFx(() -> {
+                RootGroupFixture f = fixtureRef.get();
+                if (f != null) {
+                    NbfxTabPane.unregister(f.main());
+                }
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                return null;
+            });
+        }
+    }
+
+    @Test
+    public void rootOnlyUndoRejectsContentMinimizedForMaximization() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                Docking.runtime().completeStartupLayout();
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent rootContent = new ViewContent(new FakeView("undo.root.maximize", "Root"));
+                ViewContent navigatorContent = new ViewContent(new FakeView("undo.root.maximize.nav", "Navigator"));
+                contentManager.open(rootContent);
+                contentManager.open(navigatorContent);
+                Tab rootTab = new Tab("Root");
+                Tab navigatorTab = new Tab("Navigator");
+                NbfxTabPane.setViewId(rootTab, "undo.root.maximize");
+                NbfxTabPane.setViewId(navigatorTab, "undo.root.maximize.nav");
+                NbfxTabPane root = (NbfxTabPane) Docking.area().applyTree(
+                        org.netbeans.modules.nbfx.platform.workspace.DockTrees.parse("L")).getFirst();
+                NbfxTabPane.attachTab(root, rootTab);
+
+                assertEquals(DefaultWindowManager.GroupMoveResult.MOVED,
+                        manager.moveGroupForGesture(root.groupId(), main.groupId(), -1));
+                NbfxTabPane.attachTab(navigator, navigatorTab);
+                Docking.slides().maximize(main.getTabs().getFirst());
+                assertTrue(Docking.slides().isMaximized());
+                assertFalse(manager.canUndo());
+                assertTrue(Docking.slides().isMaximized());
+            } finally {
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void minimizedGroupMoveUndoRestoresMinimizedPane() throws InterruptedException {
+        AtomicReference<MinimizedGroupFixture> fixtureRef = new AtomicReference<>();
+        try {
+            JavaFxTestSupport.onFx(() -> {
+                NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+                DefaultContentManager contentManager = new DefaultContentManager();
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                Docking.runtime().completeStartupLayout();
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                Docking.runtime().setWindowManager(manager);
+                ViewContent first = new ViewContent(new FakeView("undo.minimized.group.first", "First"));
+                ViewContent second = new ViewContent(new FakeView("undo.minimized.group.second", "Second"));
+                contentManager.open(first);
+                contentManager.open(second);
+                Tab firstTab = new Tab("First");
+                Tab secondTab = new Tab("Second");
+                NbfxTabPane.setViewId(firstTab, "undo.minimized.group.first");
+                NbfxTabPane.setViewId(secondTab, "undo.minimized.group.second");
+                NbfxTabPane source = (NbfxTabPane) Docking.area().split(
+                        new DropTarget<>(main, Side.RIGHT));
+                NbfxTabPane.attachTab(source, firstTab);
+                NbfxTabPane.attachTab(source, secondTab);
+                Docking.slides().minimize(source, Side.BOTTOM, 180,
+                        Docking.area().currentAnchor(source));
+                Docking.slides().slideIn(firstTab);
+                fixtureRef.set(new MinimizedGroupFixture(manager, main, firstTab, secondTab, source));
+
+                assertEquals(DefaultWindowManager.GroupMoveResult.MOVED,
+                        manager.moveGroupForGesture(source.groupId(), main.groupId(), -1));
+                assertEquals(List.of(firstTab, secondTab), main.getTabs());
+                assertSame(firstTab, main.getSelectionModel().getSelectedItem());
+                assertTrue(manager.canUndo());
+                return null;
+            });
+            JavaFxTestSupport.onFx(() -> {
+                MinimizedGroupFixture f = fixtureRef.get();
+                assertFalse(NbfxTabPane.tabPanes().contains(f.source()));
+                assertTrue(f.manager().canUndo());
+                f.manager().undo();
+                assertTrue(Docking.area().isMinimized(f.source()));
+                assertEquals(Side.BOTTOM, Docking.slides().sideOf(f.source()));
+                assertEquals(180, Docking.slides().sizeOf(f.source()), 0.001);
+                assertSame(f.source(), Docking.slides().groupOf(f.firstTab()));
+                assertTrue(f.main().getTabs().isEmpty());
+                assertTrue(f.manager().canRedo());
+                f.manager().redo();
+                assertEquals(List.of(f.firstTab(), f.secondTab()), f.main().getTabs());
+                assertSame(f.firstTab(), f.main().getSelectionModel().getSelectedItem());
+                return null;
+            });
+        } finally {
+            JavaFxTestSupport.onFx(() -> {
+                MinimizedGroupFixture f = fixtureRef.get();
+                if (f != null) {
+                    NbfxTabPane.unregister(f.main());
+                }
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                return null;
+            });
+        }
+    }
+
+    @Test
+    public void floatingGroupMoveUndoRecreatesClosedWindow() throws InterruptedException {
+        AtomicReference<FloatingGroupFixture> fixtureRef = new AtomicReference<>();
+        try {
+            JavaFxTestSupport.onFx(() -> {
+                NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+                NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+                DefaultContentManager contentManager = new DefaultContentManager();
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                Docking.runtime().setWindowManager(manager);
+                ViewContent content = new ViewContent(new FakeView("undo.floating.group.move", "Floating Group"));
+                contentManager.open(content);
+                Tab tab = new Tab("Floating Group");
+                NbfxTabPane.setViewId(tab, "undo.floating.group.move");
+                NbfxTabPane.attachTab(main, tab);
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Floating Group", null, null, false, 400, 300, true, false, null);
+                manager.floatContent(content.id(), options);
+                NbfxTabPane source = (NbfxTabPane) tab.getTabPane();
+                AtomicInteger shown = new AtomicInteger();
+                NbfxTabPane.stageOf(source).addEventHandler(WindowEvent.WINDOW_SHOWN, _ -> shown.incrementAndGet());
+                fixtureRef.set(new FloatingGroupFixture(manager, main, navigator, content, tab, source, shown));
+                manager.windows().getFirst().hide();
+
+                assertEquals(DefaultWindowManager.GroupMoveResult.MOVED,
+                        manager.moveGroupForGesture(source.groupId(), navigator.groupId(), -1));
+                assertEquals(List.of(tab), navigator.getTabs());
+                assertEquals(0, shown.get());
+                assertTrue(manager.canUndo());
+                return null;
+            });
+            JavaFxTestSupport.onFx(() -> {
+                FloatingGroupFixture f = fixtureRef.get();
+                assertFalse(NbfxTabPane.tabPanes().contains(f.source()));
+                assertTrue(f.manager().windows().isEmpty());
+                assertTrue(f.manager().canUndo());
+                f.manager().undo();
+                assertSame(f.source(), f.tab().getTabPane());
+                assertEquals(1, f.manager().windows().size());
+                assertEquals(400, f.manager().windows().getFirst().window().getWidth(), 0.001);
+                assertEquals(300, f.manager().windows().getFirst().window().getHeight(), 0.001);
+                assertEquals(0, f.shown().get());
+                assertTrue(f.manager().canRedo());
+                f.manager().redo();
+                assertEquals(List.of(f.tab()), f.navigator().getTabs());
+                assertTrue(f.manager().canUndo());
+                return null;
+            });
+        } finally {
+            JavaFxTestSupport.onFx(() -> {
+                FloatingGroupFixture f = fixtureRef.get();
+                if (f != null) {
+                    f.manager().windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                    NbfxTabPane.unregister(f.main());
+                    NbfxTabPane.unregister(f.navigator());
+                }
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                return null;
+            });
+        }
+    }
+
+    @Test
+    public void floatFromDisposablePaneUndoRestoresSourceAfterDisposal() throws InterruptedException {
+        AtomicReference<FloatDisposableFixture> fixtureRef = new AtomicReference<>();
+        try {
+            JavaFxTestSupport.onFx(() -> {
+                NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+                DefaultContentManager contentManager = new DefaultContentManager();
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                Docking.runtime().completeStartupLayout();
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.float.disposable", "Disposable"));
+                contentManager.open(content);
+                Tab tab = new Tab("Disposable");
+                NbfxTabPane.setViewId(tab, "undo.float.disposable");
+                NbfxTabPane source = (NbfxTabPane) Docking.area().split(
+                        new DropTarget<>(main, Side.RIGHT));
+                NbfxTabPane.attachTab(source, tab);
+                String before = org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree());
+                fixtureRef.set(new FloatDisposableFixture(manager, main, content, tab, source, before));
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Disposable", null, null, false, 400, 300, true, false, null);
+
+                manager.floatContent(content.id(), options);
+                assertEquals(1, manager.windows().size());
+                assertTrue(manager.canUndo());
+                return null;
+            });
+            JavaFxTestSupport.onFx(() -> {
+                FloatDisposableFixture f = fixtureRef.get();
+                assertFalse(NbfxTabPane.tabPanes().contains(f.source()));
+                assertTrue(f.manager().canUndo());
+                f.manager().undo();
+                assertTrue(Docking.area().contains(f.source()));
+                assertEquals(List.of(f.tab()), f.source().getTabs());
+                assertEquals(f.before(), org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree()));
+                assertTrue(f.manager().canRedo());
+                f.manager().redo();
+                assertTrue(NbfxTabPane.isFloatingPane(f.tab().getTabPane()));
+                assertTrue(f.manager().canUndo());
+                return null;
+            });
+        } finally {
+            JavaFxTestSupport.onFx(() -> {
+                FloatDisposableFixture f = fixtureRef.get();
+                if (f != null) {
+                    f.manager().windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                    NbfxTabPane.unregister(f.main());
+                }
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                return null;
+            });
+        }
+    }
+
+    @Test
+    public void floatLentTabUndoRestoresLogicalMinimizedGroup() throws InterruptedException {
+        AtomicReference<FloatLentFixture> fixtureRef = new AtomicReference<>();
+        try {
+            JavaFxTestSupport.onFx(() -> {
+                NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+                DefaultContentManager contentManager = new DefaultContentManager();
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                Docking.runtime().completeStartupLayout();
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.float.lent", "Lent"));
+                contentManager.open(content);
+                Tab tab = new Tab("Lent");
+                NbfxTabPane.setViewId(tab, "undo.float.lent");
+                NbfxTabPane source = (NbfxTabPane) Docking.area().split(
+                        new DropTarget<>(main, Side.RIGHT));
+                NbfxTabPane.attachTab(source, tab);
+                Docking.slides().minimize(source, Side.BOTTOM, 180,
+                        Docking.area().currentAnchor(source));
+                Docking.slides().slideIn(tab);
+                fixtureRef.set(new FloatLentFixture(manager, main, tab, source));
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Lent", null, null, false, 400, 300, true, false, null);
+
+                manager.floatContent(content.id(), options);
+                assertTrue(manager.canUndo());
+                return null;
+            });
+            JavaFxTestSupport.onFx(() -> {
+                FloatLentFixture f = fixtureRef.get();
+                assertFalse(NbfxTabPane.tabPanes().contains(f.source()));
+                assertTrue(f.manager().canUndo());
+                f.manager().undo();
+                assertTrue(Docking.area().isMinimized(f.source()));
+                assertEquals(Side.BOTTOM, Docking.slides().sideOf(f.source()));
+                assertSame(f.source(), Docking.slides().groupOf(f.tab()));
+                assertTrue(f.manager().canRedo());
+                f.manager().redo();
+                assertTrue(NbfxTabPane.isFloatingPane(f.tab().getTabPane()));
+                return null;
+            });
+        } finally {
+            JavaFxTestSupport.onFx(() -> {
+                FloatLentFixture f = fixtureRef.get();
+                if (f != null) {
+                    f.manager().windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                    NbfxTabPane.unregister(f.main());
+                }
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                return null;
+            });
+        }
     }
 
     @Test
@@ -440,6 +891,111 @@ public class DockUndoTest {
     }
 
     @Test
+    public void policyRefinedGroupDockFromSinglePaneIsUndoable() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                Docking.runtime().completeStartupLayout();
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager,
+                        () -> List.of(request -> request.placement() == DockPlacement.EDGE_BOTTOM
+                                ? DockDecision.allow(DockPlacement.INTO_GROUP)
+                                : DockDecision.allow(request.placement())));
+                ViewContent content = new ViewContent(new FakeView("undo.policy.refined", "Refined"));
+                contentManager.open(content);
+                Tab tab = new Tab("Refined");
+                NbfxTabPane.setViewId(tab, "undo.policy.refined");
+                NbfxTabPane source = (NbfxTabPane) Docking.area().split(
+                        new DropTarget<>(main, Side.RIGHT));
+                NbfxTabPane.attachTab(source, tab);
+                String before = org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree());
+                DockRequest request = new DockRequest(content.id(), source.groupId(), PaneRole.MAIN,
+                        null, DockPlacement.EDGE_BOTTOM, TransferMode.MOVE, Set.of());
+
+                DockResult result = manager.dock(request);
+                assertTrue(result.decision().allowed());
+                assertEquals(DockPlacement.INTO_GROUP, result.decision().placement());
+                assertEquals(List.of(tab), main.getTabs());
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertTrue(Docking.area().contains(source));
+                assertEquals(List.of(tab), source.getTabs());
+                assertEquals(before, org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree()));
+                assertTrue(manager.canRedo());
+                manager.redo();
+                assertEquals(List.of(tab), main.getTabs());
+            } finally {
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                NbfxTabPane.unregister(main);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void singlePaneRelocationInvalidatesHistory() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                DefaultWindowManager manager = new DefaultWindowManager(contentManager);
+                ViewContent history = new ViewContent(new FakeView("undo.relocate.history", "History"));
+                ViewContent moved = new ViewContent(new FakeView("undo.relocate.moved", "Moved"));
+                contentManager.open(history);
+                contentManager.open(moved);
+                Tab historyTab = new Tab("History");
+                Tab movedTab = new Tab("Moved");
+                NbfxTabPane.setViewId(historyTab, "undo.relocate.history");
+                NbfxTabPane.setViewId(movedTab, "undo.relocate.moved");
+                NbfxTabPane.attachTab(main, historyTab);
+                NbfxTabPane source = (NbfxTabPane) Docking.area().split(
+                        new DropTarget<>(main, Side.RIGHT));
+                NbfxTabPane.attachTab(source, movedTab);
+                manager.move(history.id(), navigator.groupId(), -1);
+                assertTrue(manager.canUndo());
+
+                DockRequest relocate = new DockRequest(moved.id(), source.groupId(), PaneRole.MAIN,
+                        null, DockPlacement.EDGE_BOTTOM, TransferMode.MOVE, Set.of());
+                assertTrue(manager.dock(relocate).decision().allowed());
+                assertSame(source, movedTab.getTabPane());
+                assertFalse(manager.canUndo());
+                assertFalse(manager.canRedo());
+            } finally {
+                for (javafx.scene.control.TabPane pane : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (pane instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(pane);
+                    }
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void rejectedRedoDoesNotRestoreUndoHistory() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
@@ -486,6 +1042,26 @@ public class DockUndoTest {
             }
             return null;
         });
+    }
+
+    private record FloatLentFixture(DefaultWindowManager manager, NbfxTabPane main,
+            Tab tab, NbfxTabPane source) {
+    }
+
+    private record RootGroupFixture(DefaultWindowManager manager, NbfxTabPane main,
+            Tab tab, NbfxTabPane root) {
+    }
+
+    private record FloatDisposableFixture(DefaultWindowManager manager, NbfxTabPane main,
+            ViewContent content, Tab tab, NbfxTabPane source, String before) {
+    }
+
+    private record MinimizedGroupFixture(DefaultWindowManager manager, NbfxTabPane main,
+            Tab firstTab, Tab secondTab, NbfxTabPane source) {
+    }
+
+    private record FloatingGroupFixture(DefaultWindowManager manager, NbfxTabPane main,
+            NbfxTabPane navigator, ViewContent content, Tab tab, NbfxTabPane source, AtomicInteger shown) {
     }
 
     private static final class FakeView implements ViewProvider {

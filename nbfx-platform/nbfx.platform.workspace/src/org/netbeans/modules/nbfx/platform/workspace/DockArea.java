@@ -21,6 +21,7 @@ package org.netbeans.modules.nbfx.platform.workspace;
 import org.netbeans.modules.nbfx.platform.workspace.DockTree.Leaf;
 import org.netbeans.modules.nbfx.platform.workspace.DockTree.Split;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -402,6 +403,69 @@ public final class DockArea<N extends Node> extends StackPane {
     /** Whether {@code pane} is currently one of this area's panes, permanent or docked (a hidden or minimized pane is not). */
     public boolean contains(Node pane) {
         return leaves().contains(pane);
+    }
+
+    /** Whether {@code pane} is the area's root leaf and therefore cannot be detached on its own. */
+    public boolean isRootPane(N pane) {
+        return root == pane;
+    }
+
+    /** Whether the area can be restored to {@code pane} alone without hiding non-empty content. */
+    public boolean canRestoreSinglePane(N pane) {
+        return canRestoreSinglePane(pane, Set.of());
+    }
+
+    /**
+     * Whether a root-only restore is safe, treating {@code emptied} panes as empty after the caller
+     * moves their captured content back. Includes panes set aside by maximization.
+     */
+    public boolean canRestoreSinglePane(N pane, Collection<? extends N> emptied) {
+        if (pane == null || isSetAside(pane)) {
+            return false;
+        }
+        Set<N> ignored = Set.copyOf(emptied);
+        return canRestoreSinglePane(root, pane, ignored)
+                && (layoutRoot == null || canRestoreSinglePane(layoutRoot, pane, ignored));
+    }
+
+    private boolean canRestoreSinglePane(Node shape, N pane, Set<N> emptied) {
+        if (isSplit(shape)) {
+            return ((SplitPane) shape).getItems().stream()
+                    .allMatch(child -> canRestoreSinglePane(child, pane, emptied));
+        }
+        if (shape == maximizedSlot) {
+            return true;
+        }
+        N other = leaf(shape);
+        return other == pane || emptied.contains(other) || isEmpty(other);
+    }
+
+    /**
+     * Restores a root-only layout around {@code pane}, preserving its identity. Other panes must be
+     * empty; empty permanent panes stay registered and empty docked panes are released.
+     *
+     * @throws IllegalArgumentException when another non-empty pane would be hidden
+     */
+    public void restoreSinglePane(N pane) {
+        unmaximize();
+        if (!canRestoreSinglePane(pane)) {
+            throw new IllegalArgumentException("Another non-empty pane prevents restoring this pane alone");
+        }
+        List<N> released = leaves().stream()
+                .filter(other -> other != pane && !isPrimary(other))
+                .toList();
+        if (!contains(pane)) {
+            if (!isPrimary(pane)) {
+                anchors.put(pane, null);
+            }
+            reattach(pane);
+        }
+        setRoot(pane);
+        released.forEach(this::dispose);
+        if (!isPrimary(pane)) {
+            watchEmptiness(pane);
+        }
+        LOG.fine("Restored a root-only layout around its former pane");
     }
 
     /** Every pane of the area in depth-first order - the order {@link #tree()} lists its leaves in. */
@@ -951,6 +1015,11 @@ public final class DockArea<N extends Node> extends StackPane {
         unmaximize();
         anchors.put(pane, anchor);
         reattach(pane);
+        if (!isPrimary(pane) && contains(pane)) {
+            // detach() drops the emptiness binding; a disposed pane restored by undo must be
+            // observed again so emptying it on redo releases it just like the original group.
+            watchEmptiness(pane);
+        }
         LOG.fine(() -> "Reattached a detached pane"
                 + (anchor == null ? " at its default position" : " at its former anchor"));
     }

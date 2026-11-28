@@ -354,6 +354,26 @@ api.plugins (T1)        → api.layer, api.resources
   Keyboard pane moves use the manager when possible; undo detaches the pane from its new location
   and reattaches it at the captured original anchor, while redo repeats the relocation. Main-pane
   and detached-pane moves keep the direct path.
+- C3-2ah routes context-menu New/Collapse Document Tab Group through `WindowManager`: new-group
+  issues a `SPLIT_RIGHT` dock request, while collapse preflights every tab with `canDock` and then
+  performs one `moveGroup`. Policy rejection is atomic and never falls back to a direct mutation;
+  missing manager/content identity retains the legacy path. Editor tabs resolve their stable
+  `EditorContent` id directly instead of depending on a global content-manager lookup.
+- C3-2ah review resolution: `moveGroup` records reversible custom edits for docked, minimized and
+  floating source panes, including tabs on loan to the sliding panel. Identity-less or otherwise
+  non-restorable sources are ignored rather than mutated without undo. `DockArea.reattach` re-arms
+  empty-pane cleanup, so redo after a restored pane releases it normally. Applicability uses
+  floating state rather than Stage presence, allowing panes in the main window. Split/edge edits
+  retain separate undo/redo selection so redo reactivates the moved content without disturbing the
+  prior selection on undo. A second review pass classifies dock requests by their policy-resolved
+  placement: genuine single-pane relocations invalidate history, while policy-refined group joins
+  and split operations that empty a disposable source record the source inverse. Group-move gesture
+  results distinguish unavailable identity from a consumed non-restorable rejection, and minimized
+  undo restores the recorded sliding side/size plus the active lent tab. Final review resolution:
+  custom dock redo uses the same source-state checks as group redo; FLOAT from a disposable source
+  captures that inverse too; root-only layouts restore their original pane after deferred disposal;
+  redo moves only the captured tab membership; and hidden floating stages run close cleanup without
+  being re-shown.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

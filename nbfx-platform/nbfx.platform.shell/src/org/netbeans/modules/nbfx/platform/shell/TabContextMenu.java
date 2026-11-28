@@ -21,8 +21,15 @@ package org.netbeans.modules.nbfx.platform.shell;
 import org.netbeans.api.nbfx.shell.PaneRole;
 import org.netbeans.modules.nbfx.platform.shell.NbfxTabPane;
 
+import org.netbeans.api.nbfx.content.ContentId;
+import org.netbeans.api.nbfx.content.DockPlacement;
+import org.netbeans.api.nbfx.content.TransferMode;
 import org.netbeans.api.nbfx.editor.ContentManager;
 import org.netbeans.api.nbfx.editor.EditorDocument;
+import org.netbeans.api.nbfx.shell.DockDecision;
+import org.netbeans.api.nbfx.shell.DockRequest;
+import org.netbeans.api.nbfx.shell.DockResult;
+import org.netbeans.api.nbfx.shell.WindowManager;
 import org.netbeans.api.nbfx.view.ViewProvider;
 import org.netbeans.modules.nbfx.platform.workspace.DockArea;
 import org.netbeans.modules.nbfx.platform.workspace.DropTarget;
@@ -31,6 +38,8 @@ import org.netbeans.modules.nbfx.platform.shell.DocumentCloser;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
@@ -503,10 +512,21 @@ public final class TabContextMenu {
     // --- Document tab groups ---------------------------------------------------------------------
 
     /** Moves {@code tab} into a new pane split off to the right of its current one. */
-    private static void newGroup(Tab tab) {
-        TabPane pane = tab.getTabPane();
+    static void newGroup(Tab tab) {
+        TabPane pane = tab == null ? null : tab.getTabPane();
         DockArea<TabPane> area = Docking.area();
         if (pane == null || area == null || !area.contains(pane) || pane.getTabs().size() <= 1) {
+            return;
+        }
+        WindowManager manager = Docking.windowManager();
+        Optional<ContentId> content = NbfxTabPane.contentIdForTab(tab);
+        if (manager != null && content.isPresent() && pane instanceof NbfxTabPane source) {
+            DockResult result = manager.dock(new DockRequest(content.get(), source.groupId(), null,
+                    source.groupId(), DockPlacement.SPLIT_RIGHT, TransferMode.MOVE, Set.of()));
+            if (result.decision().allowed()) {
+                manager.select(content.get());
+                Docking.logLayout("New Document Tab Group");
+            }
             return;
         }
         TabPane target = area.split(new DropTarget<>(pane, Side.RIGHT));
@@ -516,9 +536,12 @@ public final class TabContextMenu {
     }
 
     /** Moves every tab of {@code pane} into another pane of the area; the emptied pane goes away by itself. */
-    private static void collapseGroup(TabPane pane) {
+    static void collapseGroup(TabPane pane) {
         TabPane target = collapseTargetOf(pane);
         if (target == null) {
+            return;
+        }
+        if (collapseGroupWithManager(pane, target)) {
             return;
         }
         Tab selected = pane.getSelectionModel().getSelectedItem();
@@ -529,6 +552,43 @@ public final class TabContextMenu {
             NbfxTabPane.selectTabAndMoveToFront(selected);
         }
         Docking.logLayout("Collapse Document Tab Group");
+    }
+
+    /**
+     * Preflights every tab through the manager's policies, then collapses the group as one edit.
+     * Returns {@code true} when the manager path was available, including a policy rejection, so a
+     * rejected gesture never falls back to an unrecorded layout mutation.
+     */
+    private static boolean collapseGroupWithManager(TabPane pane, TabPane target) {
+        WindowManager manager = Docking.windowManager();
+        if (manager == null || !(pane instanceof NbfxTabPane source)
+                || !(target instanceof NbfxTabPane destination)) {
+            return false;
+        }
+        List<Tab> tabs = List.copyOf(pane.getTabs());
+        List<ContentId> contents = new ArrayList<>(tabs.size());
+        for (Tab tab : tabs) {
+            Optional<ContentId> content = NbfxTabPane.contentIdForTab(tab);
+            if (content.isEmpty()) {
+                return false;
+            }
+            contents.add(content.get());
+        }
+        for (ContentId content : contents) {
+            DockDecision decision = manager.canDock(new DockRequest(content, source.groupId(), null,
+                    destination.groupId(), DockPlacement.INTO_GROUP, TransferMode.MOVE, Set.of()));
+            if (!decision.allowed() || (decision.placement() != DockPlacement.INTO_GROUP
+                    && decision.placement() != DockPlacement.TAB_STRIP)) {
+                return true;
+            }
+        }
+        Tab selected = pane.getSelectionModel().getSelectedItem();
+        manager.moveGroup(source.groupId(), destination.groupId(), target.getTabs().size());
+        if (selected != null) {
+            NbfxTabPane.contentIdForTab(selected).ifPresent(manager::select);
+        }
+        Docking.logLayout("Collapse Document Tab Group");
+        return true;
     }
 
     /**

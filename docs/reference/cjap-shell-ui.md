@@ -739,6 +739,8 @@ public interface WindowManager {
 
 Public operations use content/group handles. The runtime enumerates the main window first, then
 live floating windows, then live custom product windows. `Tab` and `WindowPaneHost` are not target API types.
+`moveGroup` is ignored when any tab lacks a stable content identity or the source group's lifecycle
+cannot be restored on undo.
 
 ## 8. Windows and chrome profiles
 

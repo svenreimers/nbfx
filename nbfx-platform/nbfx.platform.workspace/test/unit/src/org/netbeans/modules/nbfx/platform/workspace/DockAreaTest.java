@@ -631,8 +631,10 @@ public class DockAreaTest {
     @Test
     public void detachedPaneCanBeReattachedAtFormerAnchor() throws Exception {
         Fixture f = onFx(Fixture::new);
+        AtomicReference<StackPane> dockedRef = new AtomicReference<>();
         onFx(() -> {
             StackPane docked = f.area.split(f.main, Side.RIGHT);
+            dockedRef.set(docked);
             docked.getChildren().add(new Region());
             String before = DockTrees.format(f.area.tree());
             Anchor<StackPane> current = f.area.currentAnchor(docked);
@@ -646,6 +648,18 @@ public class DockAreaTest {
             assertTrue(f.area.contains(docked));
             assertEquals(before, DockTrees.format(f.area.tree()));
             assertEquals(List.of(f.navigator, f.main, docked), f.area.leaves());
+            return null;
+        });
+        pulse();
+        onFx(() -> {
+            dockedRef.get().getChildren().clear();
+            return null;
+        });
+        pulse();
+        onFx(() -> {
+            StackPane docked = dockedRef.get();
+            assertFalse(f.area.contains(docked));
+            assertEquals(List.of(docked), f.host.disposed);
             return null;
         });
     }

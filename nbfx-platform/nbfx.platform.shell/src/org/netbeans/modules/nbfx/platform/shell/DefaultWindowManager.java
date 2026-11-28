@@ -22,11 +22,13 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -86,8 +88,19 @@ final class DefaultWindowManager implements WindowManager {
     }
 
     private record DockEdit(List<ContentId> contents, List<Location> undoLocations,
-            Runnable undo, Supplier<Boolean> redo, ContentId selected,
+            Runnable undo, Supplier<Boolean> redo, ContentId selected, ContentId redoSelected,
             BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
+    }
+
+    enum GroupMoveResult {
+        MOVED, UNAVAILABLE, REJECTED
+    }
+
+    private record GroupSourceState(NbfxTabPane pane, DockArea<TabPane> area,
+            boolean inArea, boolean minimized, boolean floating, boolean rootOnly, boolean supported,
+            DockArea.Anchor<TabPane> anchor, DockArea.Anchor<TabPane> floatingAnchor,
+            double x, double y, double width, double height, WindowOptions options,
+            Side slideSide, double slideSize) {
     }
 
     DefaultWindowManager(ContentManager contentManager) {
@@ -154,50 +167,233 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public void moveGroup(DockGroupId source, DockGroupId target, int index) {
+        moveGroupForGesture(source, target, index);
+    }
+
+    /** Performs a group move only when its complete inverse can be recorded. */
+    GroupMoveResult moveGroupForGesture(DockGroupId source, DockGroupId target, int index) {
         TabPane sourcePane = paneForGroup(source);
         TabPane targetPane = paneForGroup(target);
-        if (sourcePane == null || targetPane == null || sourcePane == targetPane
-                || sourcePane.getTabs().isEmpty()) {
-            return;
+        if (sourcePane == null || targetPane == null || sourcePane == targetPane) {
+            return GroupMoveResult.UNAVAILABLE;
         }
-        List<Tab> tabs = List.copyOf(sourcePane.getTabs());
+        List<Tab> tabs = groupTabs(sourcePane);
+        if (tabs.isEmpty()) {
+            return GroupMoveResult.UNAVAILABLE;
+        }
         List<ContentId> contents = new ArrayList<>();
         List<Location> locations = new ArrayList<>();
-        ContentId selected = null;
-        boolean recordable = true;
         for (Tab tab : tabs) {
             Optional<ContentId> id = NbfxTabPane.contentIdForTab(tab);
             if (id.isEmpty()) {
-                recordable = false;
-                continue;
+                return GroupMoveResult.UNAVAILABLE;
             }
             contents.add(id.get());
             locations.add(new Location(((NbfxTabPane) sourcePane).groupId(),
-                    sourcePane.getTabs().indexOf(tab), tab.isSelected()));
-            if (tab.isSelected()) {
-                selected = id.get();
-            }
+                    tabs.indexOf(tab), tab.isSelected()));
         }
+        NbfxTabPane sourceNbfx = (NbfxTabPane) sourcePane;
+        GroupSourceState sourceState = captureGroupSource(sourceNbfx);
+        if (!sourceState.supported()) {
+            return GroupMoveResult.REJECTED;
+        }
+        SlidingArea slides = Docking.slides();
+        Tab active = sourceState.minimized() && slides != null
+                ? slides.selectedOf(sourcePane) : sourcePane.getSelectionModel().getSelectedItem();
+        ContentId selected = NbfxTabPane.contentIdForTab(active).orElse(null);
         if (!moveGroupInternal(source, target, index)) {
-            return;
+            return GroupMoveResult.REJECTED;
         }
         redoStack.clear();
-        if (recordable) {
-            recordGroupEdit(contents, locations, selected, () -> moveGroupInternal(source, target, index));
+        if (!sourceNbfx.role().isPermanent()) {
+            recordCustomEdit(() -> restoreGroupSource(sourceState, tabs),
+                    () -> moveGroupInternal(source, target, index, tabs), selected,
+                    () -> groupSourceUndoApplicable(sourceState, tabs),
+                    () -> groupSourceRedoApplicable(sourceState, source, target, tabs));
+        } else {
+            recordGroupEdit(contents, locations, selected,
+                    () -> moveGroupInternal(source, target, index, tabs));
+        }
+        return GroupMoveResult.MOVED;
+    }
+
+    private static List<Tab> groupTabs(TabPane pane) {
+        SlidingArea slides = Docking.slides();
+        return List.copyOf(slides == null ? pane.getTabs() : slides.tabsOf(pane));
+    }
+
+    private static TabPane logicalPane(Tab tab) {
+        TabPane pane = tab == null ? null : tab.getTabPane();
+        SlidingArea slides = Docking.slides();
+        TabPane group = slides == null ? null : slides.groupOf(tab);
+        return group == null ? pane : group;
+    }
+
+    private GroupSourceState captureGroupSource(NbfxTabPane pane) {
+        DockArea<TabPane> area = Docking.area();
+        boolean inArea = pane.role() == PaneRole.DOCKED && area != null && area.contains(pane);
+        boolean minimized = area != null && area.isMinimized(pane);
+        boolean floating = NbfxTabPane.isFloatingPane(pane);
+        boolean rootOnly = inArea && area.isRootPane(pane);
+        boolean supported = pane.role().isPermanent() || inArea || minimized || floating;
+        DockArea.Anchor<TabPane> anchor = inArea ? area.currentAnchor(pane)
+                : minimized ? area.anchorOf(pane) : null;
+        FloatingWindow window = floating ? this.floating.get(pane) : null;
+        DockArea.Anchor<TabPane> floatingAnchor = window == null ? null : window.anchor();
+        Stage stage = floating ? NbfxTabPane.stageOf(pane) : null;
+        double x = stage == null ? 0 : stage.getX();
+        double y = stage == null ? 0 : stage.getY();
+        double width = stage == null ? 0 : stage.getWidth();
+        double height = stage == null ? 0 : stage.getHeight();
+        WindowOptions options = defaultFloatingOptions();
+        if (floating) {
+            options = window == null ? new WindowOptions(WindowKind.FLOATING, null,
+                    stage == null ? null : stage.getTitle(), null, null, false, width, height,
+                    stage != null && stage.isResizable(), false, null) : window.options();
+        }
+        SlidingArea slides = Docking.slides();
+        Side slideSide = minimized && slides != null ? slides.sideOf(pane) : null;
+        double slideSize = minimized && slides != null ? slides.sizeOf(pane) : 0;
+        return new GroupSourceState(pane, area, inArea, minimized, floating, rootOnly, supported, anchor,
+                floatingAnchor, x, y, width, height, options, slideSide, slideSize);
+    }
+
+    private void restoreGroupSource(GroupSourceState state, List<Tab> tabs) {
+        NbfxTabPane pane = state.pane();
+        if (!NbfxTabPane.tabPanes().contains(pane)) {
+            NbfxTabPane.register(pane);
+        }
+        for (int i = 0; i < tabs.size(); i++) {
+            NbfxTabPane.moveTab(pane, tabs.get(i), i);
+        }
+        if (state.rootOnly()) {
+            state.area().restoreSinglePane(pane);
+        } else if (state.inArea()) {
+            if (state.area().contains(pane) && !state.area().isRootPane(pane)) {
+                state.area().detach(pane);
+            }
+            if (!state.area().contains(pane)) {
+                state.area().reattach(pane, state.anchor());
+            }
+        } else if (state.minimized()) {
+            SlidingArea slides = Docking.slides();
+            if (slides == null) {
+                state.area().minimize(pane, state.anchor());
+            } else {
+                slides.minimize(pane, state.slideSide(), state.slideSize(), state.anchor());
+            }
+        } else if (floating.get(pane) == null) {
+            if (NbfxTabPane.isFloatingPane(pane)) {
+                NbfxTabPane.closeFloatingPane(pane, true, false);
+            }
+            NbfxTabPane.showDetachedPane(pane, state.x(), state.y(), state.width(), state.height(),
+                    windowStageConfigurator(state.options(), state.x(), state.y()));
+            registerFloating(pane, state.floatingAnchor(), state.options());
+        } else {
+            Stage current = NbfxTabPane.stageOf(pane);
+            if (current != null && !current.isShowing()) {
+                current.show();
+            }
         }
     }
 
+    private boolean canRestoreRootOnly(GroupSourceState state, List<Tab> tabs) {
+        Set<TabPane> emptied = new HashSet<>();
+        for (Tab tab : tabs) {
+            TabPane owner = tab.getTabPane();
+            if (owner instanceof NbfxTabPane nbfx && groupTabs(nbfx).stream().allMatch(tabs::contains)) {
+                emptied.add(owner);
+            }
+        }
+        SlidingArea slides = Docking.slides();
+        if (slides != null) {
+            for (TabPane minimized : slides.panesMinimizedForMaximize()) {
+                if (minimized == state.pane()) {
+                    continue;
+                }
+                List<Tab> minimizedTabs = groupTabs(minimized);
+                if (!minimizedTabs.isEmpty() && !minimizedTabs.stream().allMatch(tabs::contains)) {
+                    return false;
+                }
+                emptied.add(minimized);
+            }
+        }
+        return state.area().canRestoreSinglePane(state.pane(), emptied);
+    }
+
+    private boolean groupSourceUndoApplicable(GroupSourceState state, List<Tab> tabs) {
+        if (!state.supported() || Docking.area() != state.area()
+                || tabs.stream().anyMatch(tab -> tab.getTabPane() == null)) {
+            return false;
+        }
+        if (state.inArea()) {
+            return !NbfxTabPane.isFloatingPane(state.pane())
+                    && !state.area().isMinimized(state.pane())
+                    && !state.area().isSetAside(state.pane())
+                    && (!state.rootOnly() || canRestoreRootOnly(state, tabs));
+        }
+        if (state.minimized()) {
+            return !state.area().contains(state.pane());
+        }
+        return (state.area() == null || !state.area().contains(state.pane()))
+                && (NbfxTabPane.stageOf(state.pane()) == null || NbfxTabPane.isFloatingPane(state.pane()));
+    }
+
+    private boolean groupSourceRedoApplicable(GroupSourceState state, List<Tab> tabs) {
+        if (!state.supported() || Docking.area() != state.area()
+                || tabs.stream().anyMatch(tab -> tab.getTabPane() == null)
+                || !groupTabs(state.pane()).containsAll(tabs)) {
+            return false;
+        }
+        if (state.inArea()) {
+            return state.area().contains(state.pane())
+                    && (!state.rootOnly() || state.area().isRootPane(state.pane()))
+                    && !NbfxTabPane.isFloatingPane(state.pane())
+                    && !state.area().isMinimized(state.pane())
+                    && !state.area().isSetAside(state.pane());
+        }
+        return state.minimized() ? state.area().isMinimized(state.pane())
+                : NbfxTabPane.isFloatingPane(state.pane());
+    }
+
+    private boolean groupSourceRedoApplicable(GroupSourceState state, DockGroupId source,
+            DockGroupId target, List<Tab> tabs) {
+        return paneForGroup(source) != null && paneForGroup(target) != null
+                && groupSourceRedoApplicable(state, tabs);
+    }
+
     private boolean moveGroupInternal(DockGroupId source, DockGroupId target, int index) {
+        TabPane sourcePane = paneForGroup(source);
+        return sourcePane != null && moveGroupInternal(source, target, index, groupTabs(sourcePane));
+    }
+
+    private boolean moveGroupInternal(DockGroupId source, DockGroupId target, int index, List<Tab> tabs) {
         TabPane sourcePane = paneForGroup(source);
         TabPane targetPane = paneForGroup(target);
         if (sourcePane == null || targetPane == null || sourcePane == targetPane) {
             return false;
         }
-        List<Tab> tabs = List.copyOf(sourcePane.getTabs());
         for (int i = 0; i < tabs.size(); i++) {
             NbfxTabPane.moveTab(targetPane, tabs.get(i), index < 0 ? targetPane.getTabs().size() : index + i);
         }
+        releaseHiddenFloatingSource(sourcePane);
         return true;
+    }
+
+    private void releaseHiddenFloatingSource(TabPane sourcePane) {
+        if (!(sourcePane instanceof NbfxTabPane nbfx) || !nbfx.getTabs().isEmpty()
+                || !NbfxTabPane.isFloatingPane(nbfx)) {
+            return;
+        }
+        Stage stage = NbfxTabPane.stageOf(nbfx);
+        if (stage != null && !stage.isShowing()) {
+            FloatingWindow window = floating.remove(nbfx);
+            if (window != null) {
+                window.markClosed();
+            }
+            NbfxTabPane.closeFloatingPane(nbfx, true, false);
+            NbfxTabPane.unregister(nbfx);
+        }
     }
 
     boolean movePaneForGesture(DockGroupId group, DropTarget<TabPane> target) {
@@ -256,7 +452,8 @@ final class DefaultWindowManager implements WindowManager {
             return false;
         }
         if (index < 0 || index >= pane.getTabs().size()) {
-            NbfxTabPane.attachTab(pane, tab);
+            NbfxTabPane.moveTab(pane, tab, pane.getTabs().size());
+            NbfxTabPane.selectTabAndMoveToFront(tab);
         } else {
             NbfxTabPane.moveTab(pane, tab, index);
             NbfxTabPane.selectTabAndMoveToFront(tab);
@@ -302,31 +499,72 @@ final class DefaultWindowManager implements WindowManager {
         }
         DockPlacement resolvedPlacement = decision.placement();
         DockDecision refined = validatePlacement(request, resolvedPlacement);
-        return refined == null ? decision : refined;
+        if (refined != null) {
+            return refined;
+        }
+        Tab tab = findTab(request.content()).orElse(null);
+        TabPane source = logicalPane(tab);
+        if (source instanceof NbfxTabPane nbfx && groupTabs(source).size() == 1
+                && dockEmptiesSource(request, resolvedPlacement, source, Docking.area())) {
+            GroupSourceState sourceState = captureGroupSource(nbfx);
+            if (!sourceState.supported()) {
+                return DockDecision.reject("dock.source.unrestorable");
+            }
+        }
+        return decision;
     }
 
     @Override
     public DockResult dock(DockRequest request) {
         Location before = request == null ? null : location(request.content());
         Tab tab = request == null ? null : findTab(request.content()).orElse(null);
-        TabPane source = tab == null ? null : tab.getTabPane();
+        TabPane source = logicalPane(tab);
         DockArea<TabPane> area = Docking.area();
-        boolean relocatedSinglePane = source != null && area != null && area.contains(source)
-                && source.getTabs().size() == 1 && source != area.mainPane()
-                && (isEdgePlacement(request.placement()) || isSplitPlacement(request.placement()));
-        DockResult result = performDock(request);
-        if (result.decision().allowed() && before != null && !relocatedSinglePane
-                && result.decision().placement() != DockPlacement.FLOAT
-                && paneForGroup(before.group()) != null) {
-            recordEdit(request.content(), before,
-                    isGroupPlacement(result.decision().placement()),
-                    () -> performDock(request).decision().allowed());
+        boolean singlePaneBefore = source != null && groupTabs(source).size() == 1;
+        GroupSourceState sourceState = singlePaneBefore && source instanceof NbfxTabPane nbfx
+                ? captureGroupSource(nbfx) : null;
+        DockDecision decision = canDock(request);
+        DockResult result = performDock(request, decision);
+        if (!result.decision().allowed()) {
+            return result;
+        }
+        DockPlacement placement = result.decision().placement();
+        boolean sourceEmptied = singlePaneBefore && groupTabs(source).isEmpty();
+        if (placement != DockPlacement.FLOAT && singlePaneBefore && !sourceEmptied
+                && (isSplitPlacement(placement) || isEdgePlacement(placement))
+                && area != null && area.contains(source)) {
+            undoStack.clear();
+            redoStack.clear();
+            return result;
+        }
+        if (placement != DockPlacement.FLOAT && before != null) {
+            if (sourceEmptied && sourceState != null && !sourceState.pane().role().isPermanent()) {
+                DockGroupId redoTarget = resolveTargetGroup(request);
+                recordCustomEdit(() -> restoreGroupSource(sourceState, List.of(tab)),
+                        () -> performDock(request).decision().allowed(), request.content(),
+                        () -> groupSourceUndoApplicable(sourceState, List.of(tab)),
+                        () -> groupSourceRedoApplicable(sourceState, List.of(tab))
+                                && (redoTarget == null || paneForGroup(redoTarget) != null));
+            } else if (paneForGroup(before.group()) != null) {
+                ContentId undoSelected = isGroupPlacement(placement) || before.selected()
+                        ? request.content() : null;
+                ContentId redoSelected = isGroupPlacement(placement) || isSplitPlacement(placement)
+                        || isEdgePlacement(placement) ? request.content() : null;
+                recordEdit(request.content(), before, undoSelected, redoSelected,
+                        () -> performDock(request).decision().allowed());
+            } else {
+                undoStack.clear();
+                redoStack.clear();
+            }
         }
         return result;
     }
 
     private DockResult performDock(DockRequest request) {
-        DockDecision decision = canDock(request);
+        return performDock(request, canDock(request));
+    }
+
+    private DockResult performDock(DockRequest request, DockDecision decision) {
         if (!decision.allowed()) {
             return DockResult.rejected(decision);
         }
@@ -364,7 +602,8 @@ final class DefaultWindowManager implements WindowManager {
                 NbfxTabPane.moveTab(pane, tab, index);
                 NbfxTabPane.selectTabAndMoveToFront(tab);
             } else {
-                NbfxTabPane.attachTab(pane, tab);
+                NbfxTabPane.moveTab(pane, tab, pane.getTabs().size());
+                NbfxTabPane.selectTabAndMoveToFront(tab);
             }
             return DockResult.accepted(decision, ((NbfxTabPane) pane).groupId());
         }
@@ -445,8 +684,8 @@ final class DefaultWindowManager implements WindowManager {
         DockEdit edit = redoStack.pop();
         boolean success = edit.redo().get();
         if (success) {
-            if (edit.selected() != null) {
-                select(edit.selected());
+            if (edit.redoSelected() != null) {
+                select(edit.redoSelected());
             }
             undoStack.push(edit);
         }
@@ -454,23 +693,30 @@ final class DefaultWindowManager implements WindowManager {
 
     private Location location(ContentId content) {
         Tab tab = findTab(content).orElse(null);
-        if (tab == null || !(tab.getTabPane() instanceof NbfxTabPane pane)) {
+        if (tab == null || !(logicalPane(tab) instanceof NbfxTabPane pane)) {
             return null;
         }
-        return new Location(pane.groupId(), pane.getTabs().indexOf(tab), tab.isSelected());
+        return new Location(pane.groupId(), groupTabs(pane).indexOf(tab), tab.isSelected());
     }
 
     private void recordEdit(ContentId content, Location before, boolean select,
             Supplier<Boolean> redo) {
+        recordEdit(content, before, select ? content : null, select ? content : null, redo);
+    }
+
+    private void recordEdit(ContentId content, Location before, ContentId undoSelected,
+            ContentId redoSelected, Supplier<Boolean> redo) {
         if (before == null) {
             return;
         }
-        recordGroupEdit(List.of(content), List.of(before), select ? content : null, redo);
+        recordGroupEdit(List.of(content), List.of(before), null, undoSelected, redoSelected, redo,
+                () -> paneForGroup(before.group()) != null && findTab(content).isPresent(),
+                () -> findTab(content).isPresent());
     }
 
     private void recordGroupEdit(List<ContentId> contents, List<Location> undoLocations,
             ContentId selected, Supplier<Boolean> redo) {
-        recordGroupEdit(contents, undoLocations, null, selected, redo,
+        recordGroupEdit(contents, undoLocations, null, selected, selected, redo,
                 () -> undoLocations.stream().allMatch(location -> paneForGroup(location.group()) != null)
                         && contents.stream().allMatch(content -> findTab(content).isPresent()),
                 () -> contents.stream().allMatch(content -> findTab(content).isPresent()));
@@ -479,12 +725,19 @@ final class DefaultWindowManager implements WindowManager {
     private void recordGroupEdit(List<ContentId> contents, List<Location> undoLocations,
             Runnable undo, ContentId selected, Supplier<Boolean> redo,
             BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
+        recordGroupEdit(contents, undoLocations, undo, selected, selected, redo,
+                undoApplicable, redoApplicable);
+    }
+
+    private void recordGroupEdit(List<ContentId> contents, List<Location> undoLocations,
+            Runnable undo, ContentId undoSelected, ContentId redoSelected, Supplier<Boolean> redo,
+            BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
         if (contents.isEmpty() || contents.size() != undoLocations.size()) {
             return;
         }
         redoStack.clear();
         undoStack.push(new DockEdit(List.copyOf(contents), List.copyOf(undoLocations), undo,
-                redo, selected, undoApplicable, redoApplicable));
+                redo, undoSelected, redoSelected, undoApplicable, redoApplicable));
         while (undoStack.size() > 100) {
             undoStack.removeLast();
         }
@@ -493,7 +746,7 @@ final class DefaultWindowManager implements WindowManager {
     private void recordCustomEdit(Runnable undo, Supplier<Boolean> redo, ContentId selected,
             BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
         redoStack.clear();
-        undoStack.push(new DockEdit(List.of(), List.of(), undo, redo, selected,
+        undoStack.push(new DockEdit(List.of(), List.of(), undo, redo, selected, selected,
                 undoApplicable, redoApplicable));
         while (undoStack.size() > 100) {
             undoStack.removeLast();
@@ -515,13 +768,24 @@ final class DefaultWindowManager implements WindowManager {
     private DockWindow floatContentRecorded(ContentId content, WindowOptions options, double x, double y) {
         Location before = location(content);
         Tab sourceTab = findTab(content).orElse(null);
-        boolean alreadyFloating = sourceTab != null && sourceTab.getTabPane() instanceof NbfxTabPane source
+        TabPane sourcePane = logicalPane(sourceTab);
+        boolean alreadyFloating = sourcePane instanceof NbfxTabPane source
                 && NbfxTabPane.isFloatingPane(source);
+        GroupSourceState sourceState = sourcePane instanceof NbfxTabPane nbfx
+                && !nbfx.role().isPermanent() && groupTabs(sourcePane).size() == 1
+                ? captureGroupSource(nbfx) : null;
         DockWindow window = floatContentAt(content, options, x, y);
         if (alreadyFloating) {
             return window;
         }
-        if (before != null && paneForGroup(before.group()) != null) {
+        if (sourceState != null && sourceState.supported()) {
+            recordCustomEdit(() -> restoreGroupSource(sourceState, List.of(sourceTab)), () -> {
+                floatContentAt(content, options, x, y);
+                return true;
+            }, before == null || !before.selected() ? null : content,
+                    () -> groupSourceUndoApplicable(sourceState, List.of(sourceTab)),
+                    () -> groupSourceRedoApplicable(sourceState, List.of(sourceTab)));
+        } else if (sourceState == null && before != null && paneForGroup(before.group()) != null) {
             recordEdit(content, before, before.selected(), () -> {
                 floatContentAt(content, options, x, y);
                 return true;
@@ -997,6 +1261,19 @@ final class DefaultWindowManager implements WindowManager {
             return Docking.area() == null ? DockDecision.reject("dock.target.missing") : null;
         }
         return DockDecision.reject("dock.placement.unsupported");
+    }
+
+    private boolean dockEmptiesSource(DockRequest request, DockPlacement placement,
+            TabPane source, DockArea<TabPane> area) {
+        boolean outsideArea = area == null || !area.contains(source);
+        if (isGroupPlacement(placement)) {
+            return source instanceof NbfxTabPane nbfx
+                    && !nbfx.groupId().equals(resolveTargetGroup(request));
+        }
+        if (isSplitPlacement(placement)) {
+            return outsideArea || source == paneForGroup(resolveTargetGroup(request));
+        }
+        return isEdgePlacement(placement) && outsideArea;
     }
 
     private DockGroupId resolveTargetGroup(DockRequest request) {

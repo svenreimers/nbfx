@@ -78,7 +78,8 @@ public interface WindowManager {
     /**
      * Moves every tab from {@code source} into {@code target} at {@code index}, preserving tab
      * order. The source and target must differ; unknown groups are ignored. This is one undoable
-     * gesture.
+     * gesture. The move is ignored when a tab has no stable content identity or the source group's
+     * lifecycle cannot be restored on undo.
      *
      * @param source the source group
      * @param target the destination group

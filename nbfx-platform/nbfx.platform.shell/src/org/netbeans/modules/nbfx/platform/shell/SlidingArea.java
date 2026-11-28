@@ -28,6 +28,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Logger;
 import javafx.animation.FadeTransition;
 import javafx.animation.PauseTransition;
@@ -436,6 +437,11 @@ public final class SlidingArea extends StackPane {
     /** Whether a tab is maximized. */
     public boolean isMaximized() {
         return area.isMaximized();
+    }
+
+    /** View panes temporarily minimized for maximization, restored by {@link #restoreMaximized()}. */
+    Set<TabPane> panesMinimizedForMaximize() {
+        return Set.copyOf(minimizedForMaximize);
     }
 
     /** The pane of the maximized tab, or {@code null}. */

@@ -151,22 +151,24 @@ final class TabMover {
     /** Starts moving {@code pane} with all its tabs: into another pane, or next to one, or along the area. */
     static void movePane(TabPane pane) {
         DockArea<TabPane> area = Docking.area();
-        if (area == null || pane.getTabs().isEmpty()) {
+        SlidingArea slides = Docking.slides();
+        List<Tab> tabs = slides == null ? List.copyOf(pane.getTabs()) : slides.tabsOf(pane);
+        if (area == null || tabs.isEmpty()) {
             return;
         }
         List<Candidate> candidates = candidates(area, other -> other != pane, other -> other != pane);
-        Tab selected = pane.getSelectionModel().getSelectedItem();
+        Tab selected = slides == null ? pane.getSelectionModel().getSelectedItem() : slides.selectedOf(pane);
         start(area, candidates, candidate -> {
             if (candidate.isJoin()) {
                 if (!movePaneJoinWithManager(pane, candidate.pane())) {
-                    moveAll(pane, candidate.pane());
+                    moveAll(tabs, candidate.pane());
                 }
             } else if (!movePaneWithManager(pane, candidate.target())) {
                 if (area.contains(pane)) {
                     area.relocate(pane, candidate.target());
                 } else {
                     // A detached window's pane: its tabs join a new pane of the area, and the window closes.
-                    moveAll(pane, area.split(candidate.target()));
+                    moveAll(tabs, area.split(candidate.target()));
                 }
             }
             if (selected != null) {
@@ -188,12 +190,17 @@ final class TabMover {
                 || !(target instanceof NbfxTabPane targetPane) || sourcePane == targetPane) {
             return false;
         }
+        if (manager instanceof DefaultWindowManager defaultManager) {
+            return defaultManager.moveGroupForGesture(
+                    sourcePane.groupId(), targetPane.groupId(), target.getTabs().size())
+                    != DefaultWindowManager.GroupMoveResult.UNAVAILABLE;
+        }
         manager.moveGroup(sourcePane.groupId(), targetPane.groupId(), target.getTabs().size());
         return true;
     }
 
-    private static void moveAll(TabPane from, TabPane into) {
-        for (Tab tab : List.copyOf(from.getTabs())) {
+    private static void moveAll(List<Tab> tabs, TabPane into) {
+        for (Tab tab : tabs) {
             NbfxTabPane.moveTab(into, tab, into.getTabs().size());
         }
     }
