@@ -37,7 +37,6 @@ import org.netbeans.api.nbfx.shell.ShellProfileResolver;
 import org.netbeans.api.nbfx.shell.ShellProfileSelection;
 import org.netbeans.api.nbfx.shell.ShellProfileSpec;
 import org.netbeans.api.nbfx.shell.ChromeProfilePolicy;
-import org.netbeans.api.nbfx.shell.ChromeProfilePolicyProvider;
 import org.netbeans.api.nbfx.shell.WindowDecoration;
 import org.netbeans.api.nbfx.shell.WindowKind;
 import org.netbeans.api.nbfx.shell.WindowManager;
@@ -83,7 +82,6 @@ import org.netbeans.api.nbfx.content.Content;
 import org.netbeans.api.nbfx.editor.EditorDocument;
 import org.netbeans.modules.nbfx.platform.launcher.Budget;
 import org.netbeans.modules.nbfx.platform.theme.NbfxTheme;
-import org.netbeans.api.nbfx.product.ProductProvider;
 import org.netbeans.spi.nbfx.shell.WindowPane;
 import org.netbeans.spi.nbfx.shell.WindowPaneContext;
 import org.netbeans.spi.nbfx.shell.WindowPaneProvider;
@@ -175,7 +173,7 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
             new org.netbeans.modules.nbfx.platform.content.DefaultContentManager();
     private final WindowManager windowManager = new DefaultWindowManager(contentManager,
             () -> Lookup.getDefault().lookupAll(DockPolicy.class),
-            this::snapshot, appState);
+            this::snapshot, appState, this::shellLookup, CloseConfirmation::confirmClose);
     /** Binds view tab open/close to this shell's content manager. */
     private NbfxTabPane.ViewLifecycle viewLifecycle;
     /** Binds editor tab open/close to this shell's content manager. */
@@ -461,21 +459,10 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
      * through without making startup fail.
      */
     static ShellProfileSelection selectMainProfile(Lookup lookup, String restoredProfileId) {
-        List<ProductProvider> productProviders = List.copyOf(lookup.lookupAll(ProductProvider.class));
-        if (productProviders.size() > 1) {
-            throw new IllegalStateException("Exactly one ProductProvider is allowed; found "
-                    + productProviders.size());
-        }
-        ChromeProfilePolicy policy = null;
-        if (!productProviders.isEmpty()) {
-            String policyId = ProductProvider.resolve(lookup).chromeProfilePolicyId();
-            policy = ChromeProfilePolicyProvider.resolve(policyId, lookup).orElseThrow(
-                    () -> new IllegalStateException("No ChromeProfilePolicyProvider for product policy "
-                            + policyId));
-        }
+        ChromeProfilePolicy policy = WindowChromeProfiles.productPolicy(lookup);
         List<ShellProfileSpec> profiles = ShellProfileRegistry.discover();
         ShellChromeProfile explicit = single(lookup, ShellChromeProfile.class, "ShellChromeProfile");
-        ShellProfileHint hint = single(lookup, ShellProfileHint.class, "ShellProfileHint");
+        ShellProfileHint hint = WindowChromeProfiles.hint(lookup);
         String restoredId = restoredProfileId == null || restoredProfileId.isBlank()
                 ? null : restoredProfileId;
         boolean hintDeclared = hint != null

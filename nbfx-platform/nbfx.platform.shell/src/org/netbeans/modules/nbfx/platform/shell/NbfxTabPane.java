@@ -1786,10 +1786,17 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
      */
     public static TabPane openDetachedWindow(List<Tab> tabs, Tab activeTab,
                                       double x, double y, double width, double height) {
+        return openDetachedWindow(tabs, activeTab, x, y, width, height, _ -> { });
+    }
+
+    /** Creates a detached window, running manager adoption/configuration before the first show. */
+    static TabPane openDetachedWindow(List<Tab> tabs, Tab activeTab,
+            double x, double y, double width, double height, Consumer<NbfxTabPane> beforeShow) {
         if (tabs == null || tabs.isEmpty()) {
             return null;
         }
-        TabPane newPane = new NbfxTabPane();
+        Objects.requireNonNull(beforeShow, "beforeShow");
+        NbfxTabPane newPane = new NbfxTabPane();
         for (Tab tab : tabs) {
             TabPane source = tab.getTabPane();
             if (source != null) {
@@ -1801,6 +1808,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         if (activeTab != null) {
             newPane.getSelectionModel().select(activeTab);
         }
+        beforeShow.accept(newPane);
         stage.show();
         return newPane;
     }

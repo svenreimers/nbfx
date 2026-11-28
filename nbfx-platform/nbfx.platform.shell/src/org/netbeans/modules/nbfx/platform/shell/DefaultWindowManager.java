@@ -81,6 +81,7 @@ final class DefaultWindowManager implements WindowManager {
     private final Supplier<WindowState> mainState;
     private final AppState appState;
     private final Predicate<List<EditorDocument>> closeConfirmation;
+    private final Supplier<Lookup> chromeLookup;
     private final Map<NbfxTabPane, FloatingWindow> floating = new LinkedHashMap<>();
     private final Map<WindowId, CustomWindow> custom = new LinkedHashMap<>();
     private final Deque<DockEdit> undoStack = new ArrayDeque<>();
@@ -132,11 +133,18 @@ final class DefaultWindowManager implements WindowManager {
     DefaultWindowManager(ContentManager contentManager, Supplier<Collection<? extends DockPolicy>> policies,
             Supplier<WindowState> mainState, AppState appState,
             Predicate<List<EditorDocument>> closeConfirmation) {
+        this(contentManager, policies, mainState, appState, Lookup::getDefault, closeConfirmation);
+    }
+
+    DefaultWindowManager(ContentManager contentManager, Supplier<Collection<? extends DockPolicy>> policies,
+            Supplier<WindowState> mainState, AppState appState, Supplier<Lookup> chromeLookup,
+            Predicate<List<EditorDocument>> closeConfirmation) {
         this.contentManager = Objects.requireNonNull(contentManager, "contentManager");
         this.policies = Objects.requireNonNull(policies, "policies");
         this.mainState = Objects.requireNonNull(mainState, "mainState");
         this.appState = appState;
         this.closeConfirmation = Objects.requireNonNull(closeConfirmation, "closeConfirmation");
+        this.chromeLookup = Objects.requireNonNull(chromeLookup, "chromeLookup");
     }
 
     @Override
@@ -775,6 +783,21 @@ final class DefaultWindowManager implements WindowManager {
 
     // --- Floating windows ------------------------------------------------------------------------
 
+    private WindowOptions effectiveWindowOptions(WindowOptions options, Lookup contentLookup) {
+        return WindowChromeProfiles.effective(options, contentLookup, chromeLookup.get());
+    }
+
+    private Lookup contentLookup(Content content) {
+        return content == null ? Lookup.EMPTY : content.getLookup();
+    }
+
+    private Lookup tabLookup(List<Tab> tabs, Tab active) {
+        Tab tab = active != null ? active : tabs.isEmpty() ? null : tabs.getFirst();
+        Content content = NbfxTabPane.contentIdForTab(tab)
+                .flatMap(contentManager::find).orElse(null);
+        return contentLookup(content);
+    }
+
     @Override
     public DockWindow floatContent(ContentId content, WindowOptions options) {
         WindowOptions checked = requireFloatingOptions(options);
@@ -788,26 +811,31 @@ final class DefaultWindowManager implements WindowManager {
     private DockWindow floatContentRecorded(ContentId content, WindowOptions options, double x, double y) {
         Location before = location(content);
         Tab sourceTab = findTab(content).orElse(null);
+        if (sourceTab == null) {
+            throw new IllegalArgumentException("Content is not docked");
+        }
         TabPane sourcePane = logicalPane(sourceTab);
         boolean alreadyFloating = sourcePane instanceof NbfxTabPane source
                 && NbfxTabPane.isFloatingPane(source);
         GroupSourceState sourceState = sourcePane instanceof NbfxTabPane nbfx
                 && !nbfx.role().isPermanent() && groupTabs(sourcePane).size() == 1
                 ? captureGroupSource(nbfx) : null;
-        DockWindow window = floatContentAt(content, options, x, y);
+        WindowOptions effective = alreadyFloating ? options
+                : effectiveWindowOptions(options, contentLookup(contentManager.find(content).orElse(null)));
+        DockWindow window = floatContentAt(content, effective, x, y);
         if (alreadyFloating) {
             return window;
         }
         if (sourceState != null && sourceState.supported()) {
             recordCustomEdit(() -> restoreGroupSource(sourceState, List.of(sourceTab)), () -> {
-                floatContentAt(content, options, x, y);
+                floatContentAt(content, effective, x, y);
                 return true;
             }, before == null || !before.selected() ? null : content,
                     () -> groupSourceUndoApplicable(sourceState, List.of(sourceTab)),
                     () -> groupSourceRedoApplicable(sourceState, List.of(sourceTab)));
         } else if (sourceState == null && before != null && paneForGroup(before.group()) != null) {
             recordEdit(content, before, before.selected(), () -> {
-                floatContentAt(content, options, x, y);
+                floatContentAt(content, effective, x, y);
                 return true;
             });
         } else {
@@ -848,12 +876,16 @@ final class DefaultWindowManager implements WindowManager {
 
     private DockWindow floatGroupRecorded(DockGroupId group, WindowOptions options, double x, double y) {
         TabPane pane = paneForGroup(group);
-        boolean alreadyFloating = pane instanceof NbfxTabPane nbfx && NbfxTabPane.isFloatingPane(nbfx);
-        ContentId selected = null;
-        if (pane != null && pane.getSelectionModel().getSelectedItem() != null) {
-            selected = NbfxTabPane.contentIdForTab(pane.getSelectionModel().getSelectedItem()).orElse(null);
+        if (!(pane instanceof NbfxTabPane)) {
+            throw new IllegalArgumentException("Unknown dock group: " + group);
         }
-        FloatingWindow window = floatGroupAt(group, options, x, y);
+        boolean alreadyFloating = NbfxTabPane.isFloatingPane(pane);
+        List<Tab> tabs = pane == null ? List.of() : groupTabs(pane);
+        Tab active = pane == null ? null : pane.getSelectionModel().getSelectedItem();
+        ContentId selected = NbfxTabPane.contentIdForTab(active).orElse(null);
+        WindowOptions effective = alreadyFloating ? options
+                : effectiveWindowOptions(options, tabLookup(tabs, active));
+        FloatingWindow window = floatGroupAt(group, effective, x, y);
         if (alreadyFloating) {
             return window;
         }
@@ -866,7 +898,7 @@ final class DefaultWindowManager implements WindowManager {
                 Docking.area().reattach(window.pane(), anchor);
                 window.pane().markDocked();
             }, () -> {
-                floatGroupAt(group, options, x, y);
+                floatGroupAt(group, effective, x, y);
                 return true;
             }, selected, () -> Docking.area() != null && paneForGroup(group) != null,
                 () -> Docking.area() != null && paneForGroup(group) != null);
@@ -922,17 +954,17 @@ final class DefaultWindowManager implements WindowManager {
         }
         double x = defaultFloatingX(options);
         double y = defaultFloatingY(options);
-        WindowOptions effective = options;
-        if (options.rememberBounds() && appState != null) {
+        WindowOptions effective = effectiveWindowOptions(options, content.lookup());
+        if (effective.rememberBounds() && appState != null) {
             AppState.WindowBounds bounds = appState.customWindowBounds(id);
             if (bounds != null) {
                 double[] clamped = AppState.clampBounds(bounds.x(), bounds.y(),
                         bounds.width(), bounds.height());
                 x = clamped[0];
                 y = clamped[1];
-                effective = new WindowOptions(options.kind(), options.profile(), options.title(),
-                        options.icon(), options.owner(), options.modal(), clamped[2], clamped[3],
-                        options.resizable(), true, options.decoration(), options.closePolicy());
+                effective = new WindowOptions(effective.kind(), effective.profile(), effective.title(),
+                        effective.icon(), effective.owner(), effective.modal(), clamped[2], clamped[3],
+                        effective.resizable(), true, effective.decoration(), effective.closePolicy());
             }
         }
         Consumer<Stage> configure = windowStageConfigurator(effective, x, y);
@@ -1171,16 +1203,25 @@ final class DefaultWindowManager implements WindowManager {
         }
     }
 
+    /** Resolves neutral restored-window options before the restored stage is shown. */
+    WindowOptions restoredFloatingOptions(List<Tab> tabs, Tab active, double width, double height) {
+        WindowOptions restored = new WindowOptions(WindowKind.FLOATING, null, null, null, null,
+                false, width, height, true, false, null, WindowClosePolicy.CLOSE_CONTENT);
+        return effectiveWindowOptions(restored, tabLookup(tabs, active));
+    }
+
     /** Adopts a pane recreated by session restore without recording a user gesture. */
-    FloatingWindow adoptRestoredFloating(NbfxTabPane pane) {
+    FloatingWindow adoptRestoredFloating(NbfxTabPane pane, WindowOptions options) {
+        WindowOptions checked = requireFloatingOptions(options);
+        if (floating.containsKey(pane)) {
+            throw new IllegalStateException("Floating pane is already registered");
+        }
         if (!NbfxTabPane.isFloatingPane(pane)) {
             throw new IllegalArgumentException("Restored pane is not in a floating window");
         }
         Stage stage = NbfxTabPane.stageOf(pane);
-        WindowOptions options = new WindowOptions(WindowKind.FLOATING, null, null, null, null,
-                false, stage.getWidth(), stage.getHeight(), stage.isResizable(), false, null,
-                WindowClosePolicy.CLOSE_CONTENT);
-        FloatingWindow window = registerFloating(pane, null, options);
+        windowStageConfigurator(checked, stage.getX(), stage.getY()).accept(stage);
+        FloatingWindow window = registerFloating(pane, null, checked);
         undoStack.clear();
         redoStack.clear();
         return window;

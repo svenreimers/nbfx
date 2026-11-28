@@ -389,6 +389,12 @@ api.plugins (T1)        → api.layer, api.resources
   Legacy detached editor layouts infer editor kind, and invalid/extreme bounds are clamped to finite
   on-screen geometry. Per-window profile/decoration/option persistence and the versioned all-window
   session schema remain follow-up work.
+- C3-3c resolves effective FLOATING/CUSTOM `WindowOptions` once at creation through the shared
+  runtime product-policy/content-hint adapter. The selected profile and decoration are applied before
+  the first stage show and retained by the window handle, so `WindowState.profileId()` reports the
+  effective profile. Restored detached windows use the same pre-show callback. This slice covers
+  stage decoration and profile metadata only; detached menu/toolbar composition and persisted
+  per-window profile/options remain follow-up work.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

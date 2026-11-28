@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.prefs.BackingStoreException;
 import java.util.prefs.Preferences;
 import javafx.scene.Node;
@@ -35,6 +36,7 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.layout.Region;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import javafx.stage.WindowEvent;
 import org.junit.Test;
 import org.netbeans.api.nbfx.content.DockPlacement;
@@ -43,6 +45,7 @@ import org.netbeans.api.nbfx.editor.EditorDocument;
 import org.netbeans.api.nbfx.shell.DockRequest;
 import org.netbeans.api.nbfx.shell.DockWindow;
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.ShellProfileHint;
 import org.netbeans.api.nbfx.shell.WindowClosePolicy;
 import org.netbeans.api.nbfx.shell.WindowKind;
 import org.netbeans.api.nbfx.shell.WindowOptions;
@@ -55,6 +58,7 @@ import org.netbeans.modules.nbfx.platform.shell.AppState.PaneLayout;
 import org.netbeans.modules.nbfx.platform.shell.AppState.TabEntry;
 import org.netbeans.modules.nbfx.test.fx.JavaFxTestSupport;
 import org.openide.util.Lookup;
+import org.openide.util.lookup.Lookups;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -70,14 +74,20 @@ public class SessionRestorerTest {
 
         private final String id;
         private final String title;
+        private final Lookup lookup;
 
         View() {
             this("conformance.removed-pane", "Removed Pane View");
         }
 
         View(String id, String title) {
+            this(id, title, Lookup.EMPTY);
+        }
+
+        View(String id, String title, Lookup lookup) {
             this.id = id;
             this.title = title;
+            this.lookup = lookup;
         }
 
         @Override
@@ -94,6 +104,11 @@ public class SessionRestorerTest {
         public Node getView() {
             return new Region();
         }
+
+        @Override
+        public Lookup getLookup() {
+            return lookup;
+        }
     }
 
     private static final class Fixture {
@@ -106,16 +121,23 @@ public class SessionRestorerTest {
         final AppState appState;
 
         Fixture() {
-            this(null);
+            this(null, null);
         }
 
         Fixture(Predicate<List<EditorDocument>> closeConfirmation) {
+            this(closeConfirmation, null);
+        }
+
+        Fixture(Predicate<List<EditorDocument>> closeConfirmation, Supplier<Lookup> chromeLookup) {
             Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
             panes.put(PaneRole.MAIN.name(), main);
             Docking.create(new WindowComposition(List.of(), null), panes);
             runtime = Docking.runtime();
-            manager = closeConfirmation == null ? new DefaultWindowManager(contentManager)
-                    : new DefaultWindowManager(contentManager, closeConfirmation);
+            manager = chromeLookup == null
+                    ? closeConfirmation == null ? new DefaultWindowManager(contentManager)
+                            : new DefaultWindowManager(contentManager, closeConfirmation)
+                    : new DefaultWindowManager(contentManager, () -> List.of(), () -> null, null,
+                            chromeLookup, closeConfirmation == null ? CloseConfirmation::confirmClose : closeConfirmation);
             runtime.setWindowManager(manager);
             prefs = Preferences.userRoot().node("nbfx-session-restorer-" + System.nanoTime());
             appState = new AppState(prefs);
@@ -167,6 +189,32 @@ public class SessionRestorerTest {
     }
 
     @Test
+    public void restoredDetachedWindowResolvesProfileBeforeShow() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            Fixture f = new Fixture(null, () -> Lookup.EMPTY);
+            try {
+                ViewContent content = new ViewContent(new View("restore.profile", "Profile",
+                        Lookups.singleton(new ShellProfileHint("presentation"))));
+                f.contentManager.open(content);
+                Tab tab = tab(content);
+                NbfxTabPane pane = (NbfxTabPane) SessionRestorer.restoreDetachedPane(
+                        detachedLayout("restore.profile"), List.of(tab), tab);
+                DockWindow window = f.manager.windows().getFirst();
+
+                assertEquals("presentation", window.state().profileId());
+                assertEquals(StageStyle.UNDECORATED, NbfxTabPane.stageOf(pane).getStyle());
+                assertEquals(WindowClosePolicy.CLOSE_CONTENT, ((FloatingWindow) window).options().closePolicy());
+                assertFalse(((FloatingWindow) window).options().rememberBounds());
+                assertFalse(f.manager.canUndo());
+                assertFalse(f.manager.canRedo());
+            } finally {
+                f.close();
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void restoredDetachedPaneIsAdoptedAndRedockedAsOneWindow() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             Fixture f = new Fixture();
@@ -198,7 +246,8 @@ public class SessionRestorerTest {
                 assertFalse(floating.options().rememberBounds());
                 assertFalse(f.manager.canUndo());
                 assertFalse(f.manager.canRedo());
-                assertThrows(IllegalStateException.class, () -> f.manager.adoptRestoredFloating(pane));
+                assertThrows(IllegalStateException.class,
+                        () -> f.manager.adoptRestoredFloating(pane, floating.options()));
                 assertEquals(1, f.manager.windows().size());
 
                 window.hide();

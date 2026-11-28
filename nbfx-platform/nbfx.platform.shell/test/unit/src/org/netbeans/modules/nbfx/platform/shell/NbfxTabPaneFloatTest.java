@@ -18,6 +18,8 @@
  */
 package org.netbeans.modules.nbfx.platform.shell;
 
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javafx.scene.control.Tab;
 import javafx.stage.Stage;
 import org.junit.Test;
@@ -71,6 +73,29 @@ public class NbfxTabPaneFloatTest {
                     NbfxTabPane.unregister(floating);
                 }
                 NbfxTabPane.unregister(source);
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void detachedConfigurationRunsBeforeFirstShow() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            Tab tab = new Tab("Configured");
+            AtomicBoolean configured = new AtomicBoolean();
+            NbfxTabPane floating = (NbfxTabPane) NbfxTabPane.openDetachedWindow(
+                    List.of(tab), tab, 10, 20, 400, 300, pane -> {
+                        configured.set(true);
+                        assertFalse(NbfxTabPane.stageOf(pane).isShowing());
+                        pane.setKind(PaneKind.EDITOR);
+                    });
+            try {
+                assertTrue(configured.get());
+                assertTrue(NbfxTabPane.stageOf(floating).isShowing());
+                assertEquals(PaneKind.EDITOR, floating.getKind());
+            } finally {
+                NbfxTabPane.closeFloatingPane(floating, false);
+                NbfxTabPane.unregister(floating);
             }
             return null;
         });

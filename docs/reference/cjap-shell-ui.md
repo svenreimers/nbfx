@@ -908,7 +908,10 @@ C3-3b adopts recreated detached session panes into `DefaultWindowManager`. Resto
 preserve tabs, selection, bounds and pane kind, and appear in `WindowManager.windows()`. Restoration
 itself creates no undo edit and does not re-run dock policy; later hide/show/close/redock operations use
 the normal manager lifecycle, and redock remains undoable. Restore uses neutral `CLOSE_CONTENT`
-options. Per-window chrome/profile/options and the all-window session schema remain follow-up work.
+options. C3-3c resolves the effective FLOATING/CUSTOM profile and decoration before the first show
+and retains the profile id in `WindowState`; restored detached windows use the same pre-show path.
+This is stage decoration/profile metadata, not detached menu/toolbar composition. Per-window option
+persistence and the all-window session schema remain follow-up work.
 
 ## 9. Shell frame and declarative chrome
 

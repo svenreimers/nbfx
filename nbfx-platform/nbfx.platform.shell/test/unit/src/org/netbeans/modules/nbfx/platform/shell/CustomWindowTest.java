@@ -20,6 +20,7 @@ package org.netbeans.modules.nbfx.platform.shell;
 
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import java.util.prefs.Preferences;
 import org.junit.Test;
 import org.netbeans.api.nbfx.shell.DockWindow;
@@ -96,6 +97,8 @@ public class CustomWindowTest {
             WindowOptions options = new WindowOptions(WindowKind.CUSTOM, null, "Hide",
                     null, null, false, 400, 300, true, false, null, WindowClosePolicy.HIDE);
             DockWindow window = manager.createCustomWindow(id, options, content);
+            assertEquals("presentation", window.state().profileId());
+            assertEquals(StageStyle.UNDECORATED, ((Stage) window.window()).getStyle());
             window.close();
             assertFalse(window.window().isShowing());
             assertFalse(content.closed);
@@ -142,6 +145,8 @@ public class CustomWindowTest {
                 assertEquals(60, stage.getY(), 0.001);
                 assertEquals(640, stage.getWidth(), 0.001);
                 assertEquals(480, stage.getHeight(), 0.001);
+                assertEquals("presentation", restored.state().profileId());
+                assertEquals(StageStyle.UNDECORATED, stage.getStyle());
             } finally {
                 restored.close();
                 try {

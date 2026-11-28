@@ -499,13 +499,19 @@ public final class SessionRestorer {
     /** Recreates one persisted detached window and adopts it into the installed shell manager. */
     static TabPane restoreDetachedPane(PaneLayout layout, List<Tab> tabs, Tab active) {
         double[] bounds = AppState.clampBounds(layout.x(), layout.y(), layout.width(), layout.height());
+        if (Docking.windowManager() instanceof DefaultWindowManager manager) {
+            org.netbeans.api.nbfx.shell.WindowOptions options = manager.restoredFloatingOptions(
+                    tabs, active, bounds[2], bounds[3]);
+            return NbfxTabPane.openDetachedWindow(tabs, active,
+                    bounds[0], bounds[1], bounds[2], bounds[3], pane -> {
+                        pane.setKind(layout.kind());
+                        manager.adoptRestoredFloating(pane, options);
+                    });
+        }
         TabPane detached = NbfxTabPane.openDetachedWindow(tabs, active,
                 bounds[0], bounds[1], bounds[2], bounds[3]);
         if (detached instanceof NbfxTabPane nbfx) {
             nbfx.setKind(layout.kind());
-            if (Docking.windowManager() instanceof DefaultWindowManager manager) {
-                manager.adoptRestoredFloating(nbfx);
-            }
         }
         return detached;
     }
