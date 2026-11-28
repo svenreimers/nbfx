@@ -531,6 +531,12 @@ final class DefaultWindowManager implements WindowManager {
         return floatGroupRecorded(group, checked, defaultFloatingX(checked), defaultFloatingY(checked));
     }
 
+    DockWindow floatGroupAtForGesture(DockGroupId group, double x, double y, double width, double height) {
+        WindowOptions options = new WindowOptions(WindowKind.FLOATING, null, null, null, null,
+                false, width, height, true, false, null);
+        return floatGroupRecorded(group, options, x, y);
+    }
+
     private DockWindow floatGroupRecorded(DockGroupId group, WindowOptions options, double x, double y) {
         TabPane pane = paneForGroup(group);
         boolean alreadyFloating = pane instanceof NbfxTabPane nbfx && NbfxTabPane.isFloatingPane(nbfx);

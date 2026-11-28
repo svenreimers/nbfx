@@ -434,14 +434,22 @@ public final class TabContextMenu {
         }
     }
 
-    private static void floatGroup(TabPane pane) {
+    static void floatGroup(TabPane pane) {
         if (pane == null || pane.getTabs().isEmpty()) {
             return;
         }
         Bounds b = pane.localToScreen(pane.getBoundsInLocal());
-        Tab selected = pane.getSelectionModel().getSelectedItem();
-        NbfxTabPane.openDetachedWindow(List.copyOf(pane.getTabs()), selected,
-                b.getMinX(), b.getMinY(), Math.max(b.getWidth(), 300), Math.max(b.getHeight(), 200));
+        double x = b == null ? 0 : b.getMinX();
+        double y = b == null ? 0 : b.getMinY();
+        double width = b == null ? 300 : Math.max(b.getWidth(), 300);
+        double height = b == null ? 200 : Math.max(b.getHeight(), 200);
+        org.netbeans.api.nbfx.shell.WindowManager manager = Docking.windowManager();
+        if (manager instanceof DefaultWindowManager defaultManager && pane instanceof NbfxTabPane nbfx) {
+            defaultManager.floatGroupAtForGesture(nbfx.groupId(), x, y, width, height);
+        } else {
+            Tab selected = pane.getSelectionModel().getSelectedItem();
+            NbfxTabPane.openDetachedWindow(List.copyOf(pane.getTabs()), selected, x, y, width, height);
+        }
     }
 
     private static void dock(Tab tab) {
