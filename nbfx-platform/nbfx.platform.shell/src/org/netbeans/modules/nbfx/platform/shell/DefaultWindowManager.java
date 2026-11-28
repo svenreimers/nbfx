@@ -459,9 +459,23 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public DockWindow floatContent(ContentId content, WindowOptions options) {
+        Location before = location(content);
+        Tab sourceTab = findTab(content).orElse(null);
+        boolean alreadyFloating = sourceTab != null && sourceTab.getTabPane() instanceof NbfxTabPane source
+                && NbfxTabPane.isFloatingPane(source);
         DockWindow window = floatContentWindow(content, options);
-        undoStack.clear();
-        redoStack.clear();
+        if (alreadyFloating) {
+            return window;
+        }
+        if (before != null && paneForGroup(before.group()) != null) {
+            recordEdit(content, before, before.selected(), () -> {
+                floatContentWindow(content, options);
+                return true;
+            });
+        } else {
+            undoStack.clear();
+            redoStack.clear();
+        }
         return window;
     }
 

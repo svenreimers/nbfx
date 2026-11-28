@@ -33,6 +33,7 @@ import org.netbeans.api.nbfx.layout.DockGroupId;
 import org.netbeans.api.nbfx.shell.DockDecision;
 import org.netbeans.api.nbfx.shell.DockRequest;
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.WindowOptions;
 import org.netbeans.api.nbfx.view.ViewProvider;
 import org.netbeans.api.nbfx.views.ViewContent;
 import org.netbeans.modules.nbfx.platform.content.DefaultContentManager;
@@ -177,6 +178,51 @@ public class DockUndoTest {
             } finally {
                 NbfxTabPane.unregister(main);
                 NbfxTabPane.unregister(other);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void floatContentIsUndoableWhenSourceGroupSurvives() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = null;
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.float", "Float"));
+                contentManager.open(content);
+                Tab tab = new Tab("Float");
+                NbfxTabPane.setViewId(tab, "undo.float");
+                NbfxTabPane.attachTab(main, tab);
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Float", null, null, false, 400, 300, true, false, null);
+
+                manager.floatContent(content.id(), options);
+                assertTrue(!manager.groupOf(content.id()).orElseThrow().equals(main.groupId()));
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertEquals(main.groupId(), manager.groupOf(content.id()).orElseThrow());
+                assertTrue(manager.canRedo());
+                manager.redo();
+                assertTrue(!manager.groupOf(content.id()).orElseThrow().equals(main.groupId()));
+                assertTrue(manager.canUndo());
+            } finally {
+                if (manager != null) {
+                    manager.windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
                 DockRuntime runtime = Docking.runtime();
                 if (runtime != null) {
                     runtime.dispose();

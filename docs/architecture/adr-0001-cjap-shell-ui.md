@@ -327,6 +327,10 @@ api.plugins (T1)        → api.layer, api.resources
   `WindowManager`, producing one undo edit per successful drop. Same-position drops are no-ops;
   policy-rejected splits fail the drop instead of falling back to an unrecorded layout mutation.
   Pointer float/detach remains on the existing path.
+- C3-2aa makes programmatic `floatContent` (including FLOAT dock requests) undoable when the
+  source group survives. Undo moves the tab back to its source index; redo floats it again with
+  the same options. Whole-group float, pointer detach and redock still invalidate history until
+  their pane/window inverse is represented explicitly.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler
