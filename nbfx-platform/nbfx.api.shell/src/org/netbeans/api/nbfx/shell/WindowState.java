@@ -38,8 +38,8 @@ import java.util.Objects;
  * </ul>
  *
  * <p>The optional {@link #profileId() profile id} records which chrome profile the window last used.
- * It is persisted so a later restore can select the same profile before the frame is created; the
- * restore-time selection itself is owned by the multi-window slice, not by this state carrier.
+ * It is persisted so a later restore can select the same profile before the frame is created. The
+ * MAIN shell consumes it during startup; complete multi-window restore remains a later slice.
  *
  * @param areas      the dock areas, in the {@link org.netbeans.api.nbfx.views.ViewArea#defaults()
  *                   default area order}

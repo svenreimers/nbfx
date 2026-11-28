@@ -374,6 +374,12 @@ api.plugins (T1)        → api.layer, api.resources
   captures that inverse too; root-only layouts restore their original pane after deferred disposal;
   redo moves only the captured tab membership; and hidden floating stages run close cleanup without
   being re-shown.
+- C3-3a consumes the persisted MAIN-window `WindowState.profileId` through a narrow validated store
+  read before profile publication and frame/provider creation. Startup precedence is explicit profile,
+  valid startup hint, valid restored profile, product default/fallback, then neutral fallback. Unknown
+  ids fall through; malformed persisted tokens are ignored and logged. This closes the C2-6c
+  MAIN-profile startup loop without
+  claiming complete multi-window/session restoration.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler
@@ -488,9 +494,9 @@ split/minimize/maximize/drop behavior and tests are preserved.
   profile-aware. Ambiguous multiple explicit profiles/hints fail. Null/blank profile
   queries mean all profiles; absent MIME/language/context dimensions still exclude restricted refs.
 - C2-6c adds an optional `WindowState.profileId` with a source-compatible constructor and a
-  missing/blank-key fallback in the state store, so a session round-trips the id. Persisted state
-  round-trip does not imply restored-frame selection; selecting a restored profile before frame
-  creation remains C3-3.
+  missing/blank-key fallback in the state store, so a session round-trips the id. C3-3a now selects
+  a valid persisted MAIN profile before frame creation; complete per-window/multi-window restoration
+  remains C3-3.
 
 ## Consequences
 

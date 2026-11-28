@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.logging.Logger;
 import java.util.prefs.BackingStoreException;
 import java.util.prefs.Preferences;
 import org.netbeans.api.nbfx.shell.AreaState;
@@ -51,6 +52,8 @@ import org.openide.util.NbPreferences;
  * @since 1.0
  */
 public final class ViewStateStore {
+
+    private static final Logger LOG = Logger.getLogger(ViewStateStore.class.getName());
 
     /** The preferences path of this store; nothing collides with the session store of nbfx.ui. */
     static final String PREFERENCES_PATH = "org/netbeans/modules/nbfx/window"; // NOI18N
@@ -83,17 +86,22 @@ public final class ViewStateStore {
     }
 
     /**
-     * A store over the given preferences node. Package-visible for tests.
+     * A store over the given preferences node.
      *
      * @param prefs the node to persist into
      */
-    ViewStateStore(Preferences prefs) {
+    public ViewStateStore(Preferences prefs) {
         this.prefs = prefs;
     }
 
     /** Whether any state has been persisted yet. */
     public boolean hasState() {
         return prefs.get(KEY_SCHEMA, null) != null;
+    }
+
+    /** Loads only the persisted chrome-profile id, without parsing areas or view payloads. */
+    public Optional<String> loadProfileId() {
+        return hasState() ? Optional.ofNullable(readProfileId()) : Optional.empty();
     }
 
     /**
@@ -138,13 +146,28 @@ public final class ViewStateStore {
         double width = prefs.getDouble(KEY_WIDTH, Double.NaN);
         double height = prefs.getDouble(KEY_HEIGHT, Double.NaN);
         boolean maximized = prefs.getBoolean(KEY_MAXIMIZED, false);
+        String profileId = readProfileId();
+        return Optional.of(new WindowState(areas, x, y, width, height, maximized, viewState, profileId));
+    }
+
+    private String readProfileId() {
         // A missing or blank profile key is the pre-profile format; the restore then uses the
         // default profile selection rather than a recorded id.
         String profileId = prefs.get(KEY_PROFILE, null);
         if (profileId != null && profileId.isBlank()) {
-            profileId = null;
+            return null;
         }
-        return Optional.of(new WindowState(areas, x, y, width, height, maximized, viewState, profileId));
+        if (profileId != null) {
+            try {
+                // Reuse the public state validation without weakening the persisted schema.
+                new WindowState(List.of(), Double.NaN, Double.NaN, Double.NaN, Double.NaN,
+                        false, Map.of(), profileId);
+            } catch (IllegalArgumentException ex) {
+                LOG.warning("Ignoring invalid persisted shell profile id: " + ex.getMessage());
+                return null;
+            }
+        }
+        return profileId;
     }
 
     /** Overwrites the persisted snapshot with the given one. */

@@ -327,7 +327,8 @@ and View-menu controls; duplicate providers, missing DOCK mounts and invalid roo
   selected main profile before frame creation and applies its decoration; menu/toolbar builders and
   shell-region action reads consume profile-filtered references.
 - C2-6c: optional `WindowState.profileId` persistence with backward-compatible state loading.
-  Restored-profile selection before frame creation is completed with C3-3 multi-window restore.
+  C3-3a restores a valid persisted MAIN-window profile before frame creation; complete multi-window
+  profile/frame restoration remains part of C3-3.
 
 Acceptance for C2-6a: profile metadata round-trips through annotations/layer discovery, malformed
 entries are isolated, neutral profiles expose exactly one reusable `DOCK`, and allow-lists narrow

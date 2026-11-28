@@ -242,6 +242,15 @@ public class FxWindowSystemTest {
     }
 
     @Test
+    public void profileIdLoadsWithoutReadingWindowPayloads() {
+        java.util.prefs.Preferences prefs = MemoryPreferences.root().node("test").node("profile-only");
+        prefs.put("schema", "1");
+        prefs.put("profile", "presentation");
+
+        assertEquals("presentation", new ViewStateStore(prefs).loadProfileId().orElseThrow());
+    }
+
+    @Test
     public void missingProfileKeyLoadsAsNoProfile() {
         ViewStateStore store = newStore("profile-absent");
         // The pre-profile constructor writes no profile key.
@@ -254,6 +263,17 @@ public class FxWindowSystemTest {
         initAndLoad(new DefaultWindowSystem(regs, store, sink));
 
         assertNull(sink.applied.get(0).profileId());
+    }
+
+    @Test
+    public void malformedProfileKeyLoadsAsNoProfile() {
+        java.util.prefs.Preferences prefs = MemoryPreferences.root().node("test").node("profile-malformed");
+        prefs.put("schema", "1");
+        prefs.put("profile", "not an atomic token");
+
+        ViewStateStore store = new ViewStateStore(prefs);
+        assertNull(store.load().orElseThrow().profileId());
+        assertNull(store.loadProfileId().orElse(null));
     }
 
     @Test

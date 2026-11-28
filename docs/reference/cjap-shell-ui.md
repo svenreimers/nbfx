@@ -898,8 +898,11 @@ subclass chrome path is unchanged. Menu/toolbar builders use `ActionLayerReader.
 merge the selected profile into `ActionContextMetadata`. Null/blank profile queries mean all profiles,
 while missing MIME/language/context values still exclude references restricted on those dimensions.
 
-C2-6c adds optional `WindowState.profileId` round-trip. Restored-profile frame selection before window
-creation belongs to C3-3; state round-trip must not be presented as complete multi-window restore.
+C2-6c adds optional `WindowState.profileId` round-trip. C3-3a consumes a valid persisted MAIN-window
+profile before frame/provider creation, between a valid startup hint and product policy. Explicit
+profiles and valid hints remain authoritative; unknown ids fall through and malformed persisted tokens
+are ignored. State round-trip and MAIN-profile startup selection do not imply complete multi-window
+restore.
 
 ## 9. Shell frame and declarative chrome
 

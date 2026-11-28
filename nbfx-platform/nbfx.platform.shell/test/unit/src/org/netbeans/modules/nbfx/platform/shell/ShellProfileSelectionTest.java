@@ -78,6 +78,36 @@ public class ShellProfileSelectionTest {
     }
 
     @Test
+    public void restoredProfileSitsBetweenValidHintAndProductPolicy() {
+        ChromeProfilePolicy policy = new ChromeProfilePolicy("product:chrome",
+                Map.of(WindowKind.MAIN, "main"), "main");
+        ChromeProfilePolicyProvider policyProvider = () -> policy;
+        ProductProvider productProvider = productProvider();
+        Lookup productLookup = Lookups.fixed(policyProvider, productProvider);
+
+        ShellProfileSelection restored = ShellApplication.selectMainProfile(productLookup, "presentation");
+        assertEquals("presentation", restored.profile().id());
+        assertEquals(WindowDecoration.UNDECORATED, restored.decoration());
+
+        ShellProfileSelection hinted = ShellApplication.selectMainProfile(Lookups.fixed(
+                new ShellProfileHint("floating-editor"), policyProvider, productProvider), "presentation");
+        assertEquals("floating-editor", hinted.profile().id());
+
+        ShellProfileSelection unknownHint = ShellApplication.selectMainProfile(Lookups.fixed(
+                new ShellProfileHint("missing-profile"), policyProvider, productProvider), "presentation");
+        assertEquals("presentation", unknownHint.profile().id());
+
+        ShellProfileSpec explicit = new ShellProfileSpec("product:explicit", WindowKind.MAIN,
+                Set.of(ShellRegionId.DOCK), null, false);
+        ShellProfileSelection explicitSelection = ShellApplication.selectMainProfile(Lookups.fixed(
+                explicit, new ShellProfileHint("floating-editor"), policyProvider, productProvider), "presentation");
+        assertSame(explicit, explicitSelection.profile());
+
+        ShellProfileSelection unknownRestored = ShellApplication.selectMainProfile(productLookup, "missing-profile");
+        assertEquals("main", unknownRestored.profile().id());
+    }
+
+    @Test
     public void missingProductPolicyAndDuplicateProvidersFail() {
         IllegalStateException missingPolicy = assertThrows(IllegalStateException.class,
                 () -> ShellApplication.selectMainProfile(Lookups.singleton(productProvider())));

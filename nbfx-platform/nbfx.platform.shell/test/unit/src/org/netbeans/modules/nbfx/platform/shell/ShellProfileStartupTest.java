@@ -21,6 +21,8 @@ package org.netbeans.modules.nbfx.platform.shell;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.prefs.BackingStoreException;
+import java.util.prefs.Preferences;
 import javafx.scene.Node;
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
@@ -50,6 +52,7 @@ import org.openide.util.lookup.Lookups;
 import org.openide.util.lookup.ProxyLookup;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
 
 /** One-start integration fixture for profile publication and window decoration. */
@@ -61,32 +64,48 @@ public class ShellProfileStartupTest {
     }
 
     @Test
-    public void productProfileIsPublishedBeforeProviderCreation() throws InterruptedException {
+    public void restoredProfileIsPublishedBeforeProviderCreation() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
-            AtomicReference<ShellChromeProfile> received = new AtomicReference<>();
-            ShellProvider provider = (context, profile) -> {
-                received.set(profile);
-                assertSame(profile, context.profile());
-                assertSame(profile, context.lookup().lookup(ShellChromeProfile.class));
-                return new Frame(context);
-            };
-            ChromeProfilePolicy policy = new ChromeProfilePolicy("product:chrome",
-                    Map.of(WindowKind.MAIN, "presentation"), "main");
-            ChromeProfilePolicyProvider policyProvider = () -> policy;
-            Product product = new Product(
-                    new ProductIdentity("example", "Example", "1.0", null, null, null, null),
-                    new ProductIcons(List.of(), null, List.of()),
-                    new ProductStyle(List.of(), List.of(), List.of()),
-                    "theme.default", "example.default", "shell.default", "product:chrome",
-                    List.of(), new AboutInfo("", List.of(), List.of(), null));
-            ProductProvider productProvider = () -> product;
-            Application application = new Application(provider,
-                    Lookups.fixed(policyProvider, productProvider));
-            Stage stage = new Stage();
-            application.start(stage);
-            assertEquals("presentation", received.get().id());
-            assertEquals(StageStyle.UNDECORATED, stage.getStyle());
-            return null;
+            Preferences prefs = Preferences.userRoot().node(
+                    "org/netbeans/modules/nbfx/shell-profile-startup-test/" + System.nanoTime());
+            prefs.put("schema", "1");
+            prefs.put("profile", "presentation");
+            try {
+                Stage stage = new Stage();
+                AtomicReference<ShellChromeProfile> received = new AtomicReference<>();
+                ShellProvider provider = (context, profile) -> {
+                    received.set(profile);
+                    assertSame(profile, context.profile());
+                    assertSame(profile, context.lookup().lookup(ShellChromeProfile.class));
+                    assertEquals(StageStyle.UNDECORATED, stage.getStyle());
+                    assertFalse(stage.isShowing());
+                    return new Frame(context);
+                };
+                ChromeProfilePolicy policy = new ChromeProfilePolicy("product:chrome",
+                        Map.of(WindowKind.MAIN, "main"), "main");
+                ChromeProfilePolicyProvider policyProvider = () -> policy;
+                Product product = new Product(
+                        new ProductIdentity("example", "Example", "1.0", null, null, null, null),
+                        new ProductIcons(List.of(), null, List.of()),
+                        new ProductStyle(List.of(), List.of(), List.of()),
+                        "theme.default", "example.default", "shell.default", "product:chrome",
+                        List.of(), new AboutInfo("", List.of(), List.of(), null));
+                ProductProvider productProvider = () -> product;
+                Application application = new Application(provider,
+                        Lookups.fixed(policyProvider, productProvider),
+                        new org.netbeans.modules.nbfx.platform.workspace.ViewStateStore(prefs));
+                application.start(stage);
+                assertEquals("presentation", received.get().id());
+                assertEquals(StageStyle.UNDECORATED, stage.getStyle());
+                assertEquals("presentation", application.snapshot().profileId());
+                return null;
+            } finally {
+                try {
+                    prefs.removeNode();
+                } catch (BackingStoreException ex) {
+                    throw new AssertionError(ex);
+                }
+            }
         });
     }
 
@@ -95,7 +114,9 @@ public class ShellProfileStartupTest {
         private final ShellProvider provider;
         private final Lookup extra;
 
-        private Application(ShellProvider provider, Lookup extra) {
+        private Application(ShellProvider provider, Lookup extra,
+                org.netbeans.modules.nbfx.platform.workspace.ViewStateStore stateStore) {
+            super(stateStore);
             this.provider = provider;
             this.extra = extra;
         }

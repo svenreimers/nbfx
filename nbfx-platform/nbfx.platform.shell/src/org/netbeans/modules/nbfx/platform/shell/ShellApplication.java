@@ -35,6 +35,7 @@ import org.netbeans.api.nbfx.shell.ShellProfileHint;
 import org.netbeans.api.nbfx.shell.ShellProfileRegistry;
 import org.netbeans.api.nbfx.shell.ShellProfileResolver;
 import org.netbeans.api.nbfx.shell.ShellProfileSelection;
+import org.netbeans.api.nbfx.shell.ShellProfileSpec;
 import org.netbeans.api.nbfx.shell.ChromeProfilePolicy;
 import org.netbeans.api.nbfx.shell.ChromeProfilePolicyProvider;
 import org.netbeans.api.nbfx.shell.WindowDecoration;
@@ -132,6 +133,16 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
 
     private final AppState appState = new AppState();
     private final SessionRestorer sessionRestorer = new SessionRestorer(appState, this::viewTabFor, this::viewStateStore);
+    /** Persisted MAIN-window state read narrowly before profile/frame selection; injectable for tests. */
+    private final org.netbeans.modules.nbfx.platform.workspace.ViewStateStore stateStore;
+
+    public ShellApplication() {
+        this(new org.netbeans.modules.nbfx.platform.workspace.ViewStateStore());
+    }
+
+    ShellApplication(org.netbeans.modules.nbfx.platform.workspace.ViewStateStore stateStore) {
+        this.stateStore = Objects.requireNonNull(stateStore, "stateStore");
+    }
 
     private NbfxTabPane mainPane;
     /** The chrome profile id the main window selected, or {@code null} on the legacy path. */
@@ -207,7 +218,8 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
             ShellFrame frame = null;
             Node frameRoot = null;
             try {
-                ShellProfileSelection selection = selectMainProfile(shellLookup);
+                ShellProfileSelection selection = selectMainProfile(shellLookup,
+                        stateStore.loadProfileId().orElse(null));
                 profileId = selection.profile().id();
                 applyWindowDecoration(stage, selection.decoration());
                 InstanceContent frameServices = new InstanceContent();
@@ -440,6 +452,15 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
 
     /** Resolves the main-window profile without requiring product metadata. */
     static ShellProfileSelection selectMainProfile(Lookup lookup) {
+        return selectMainProfile(lookup, null);
+    }
+
+    /**
+     * Resolves the main-window profile with the persisted session id between a valid startup hint
+     * and product policy. Explicit profiles and valid hints remain authoritative; unknown ids fall
+     * through without making startup fail.
+     */
+    static ShellProfileSelection selectMainProfile(Lookup lookup, String restoredProfileId) {
         List<ProductProvider> productProviders = List.copyOf(lookup.lookupAll(ProductProvider.class));
         if (productProviders.size() > 1) {
             throw new IllegalStateException("Exactly one ProductProvider is allowed; found "
@@ -452,10 +473,19 @@ public class ShellApplication extends Application implements WindowSink, ShellWi
                     () -> new IllegalStateException("No ChromeProfilePolicyProvider for product policy "
                             + policyId));
         }
+        List<ShellProfileSpec> profiles = ShellProfileRegistry.discover();
+        ShellChromeProfile explicit = single(lookup, ShellChromeProfile.class, "ShellChromeProfile");
+        ShellProfileHint hint = single(lookup, ShellProfileHint.class, "ShellProfileHint");
+        String restoredId = restoredProfileId == null || restoredProfileId.isBlank()
+                ? null : restoredProfileId;
+        boolean hintDeclared = hint != null
+                && profiles.stream().anyMatch(profile -> profile.id().equals(hint.profileId()));
+        ShellProfileSpec restored = explicit == null && !hintDeclared && restoredId != null
+                ? profiles.stream().filter(profile -> profile.id().equals(restoredId))
+                        .findFirst().orElse(null)
+                : null;
         return ShellProfileResolver.resolve(WindowKind.MAIN,
-                single(lookup, ShellChromeProfile.class, "ShellChromeProfile"),
-                single(lookup, ShellProfileHint.class, "ShellProfileHint"),
-                policy, ShellProfileRegistry.discover());
+                restored == null ? explicit : restored, hint, policy, profiles);
     }
 
     private static <T> T single(Lookup lookup, Class<T> type, String description) {
