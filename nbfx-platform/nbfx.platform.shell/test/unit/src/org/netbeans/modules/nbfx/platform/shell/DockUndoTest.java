@@ -346,6 +346,55 @@ public class DockUndoTest {
     }
 
     @Test
+    public void groupPlacementRedockRestoresFloatingPaneOnUndo() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = null;
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.redock.group", "Group Redock"));
+                contentManager.open(content);
+                Tab tab = new Tab("Group Redock");
+                NbfxTabPane.setViewId(tab, "undo.redock.group");
+                NbfxTabPane.attachTab(main, tab);
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Group Redock", null, null, false, 400, 300, true, false, null);
+                org.netbeans.api.nbfx.shell.DockWindow window = manager.floatContent(content.id(), options);
+                DockGroupId group = manager.groupOf(content.id()).orElseThrow();
+                DockRequest join = new DockRequest(content.id(), group, null,
+                        navigator.groupId(), DockPlacement.INTO_GROUP, TransferMode.MOVE, Set.of());
+
+                assertTrue(manager.redock(window, join).decision().allowed());
+                assertEquals(navigator.groupId(), manager.groupOf(content.id()).orElseThrow());
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertEquals(group, manager.groupOf(content.id()).orElseThrow());
+                assertEquals(1, manager.windows().size());
+                assertEquals(400, manager.windows().getFirst().window().getWidth(), 0.001);
+                manager.redo();
+                assertEquals(navigator.groupId(), manager.groupOf(content.id()).orElseThrow());
+            } finally {
+                if (manager != null) {
+                    manager.windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void rejectedRedoDoesNotRestoreUndoHistory() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);

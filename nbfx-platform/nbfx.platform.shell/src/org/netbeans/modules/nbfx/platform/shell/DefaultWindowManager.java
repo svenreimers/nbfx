@@ -644,6 +644,9 @@ final class DefaultWindowManager implements WindowManager {
         DockGroupId group = floating.pane().groupId();
         ContentId selected = NbfxTabPane.contentIdForTab(
                 floating.pane().getSelectionModel().getSelectedItem()).orElse(null);
+        List<Tab> tabs = List.copyOf(floating.pane().getTabs());
+        boolean unregisterPane = floating.pane().role() == PaneRole.DETACHED
+                || floating.pane().role() == PaneRole.DOCKED;
         DockResult result = redockWindow(floating, request);
         if (!result.decision().allowed()) {
             return result;
@@ -657,8 +660,21 @@ final class DefaultWindowManager implements WindowManager {
             }, selected, () -> Docking.area() != null && paneForGroup(group) != null,
                 () -> Docking.area() != null && paneForGroup(group) != null);
         } else {
-            undoStack.clear();
-            redoStack.clear();
+            recordCustomEdit(() -> {
+                if (unregisterPane) {
+                    NbfxTabPane.register(floating.pane());
+                }
+                for (int i = 0; i < tabs.size(); i++) {
+                    NbfxTabPane.moveTab(floating.pane(), tabs.get(i), i);
+                }
+                NbfxTabPane.showDetachedPane(floating.pane(), x, y, width, height,
+                        windowStageConfigurator(options, x, y));
+                registerFloating(floating.pane(), null, options);
+            }, () -> {
+                FloatingWindow current = floatingWindow(group);
+                return current != null && redockWindow(current, request).decision().allowed();
+            }, selected, () -> tabs.stream().allMatch(tab -> tab.getTabPane() != null),
+                () -> paneForGroup(group) != null);
         }
         return result;
     }

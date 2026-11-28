@@ -1984,6 +1984,14 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         return null;
     }
 
+    /** Re-registers a previously unregistered pane, preserving its identity and wired lifecycle. */
+    static void register(NbfxTabPane pane) {
+        if (TAB_PANES.add(pane) && componentPane == null) {
+            setComponentPane(pane);
+        }
+        notifyViewTabsChanged();
+    }
+
     /**
      * Forgets a pane that is gone from the scene graph (a docked pane removed once emptied), so it is
      * no longer searched, persisted or restored focus to.

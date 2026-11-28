@@ -346,6 +346,10 @@ api.plugins (T1)        → api.layer, api.resources
   floating stage geometry/options; redo finds the current floating handle and reapplies the same
   dock request. Group-placement redock still invalidates history until tab reconstruction is
   represented explicitly.
+- C3-2af extends that inverse to group-placement redock: the edit retains the original floating
+  pane and tab instances, re-registers the pane on undo, moves the tabs back in original order,
+  recreates its stage at the prior geometry, and reuses the same request for redo. Closed/missing
+  tabs make the edit inapplicable rather than partially restoring it.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler
