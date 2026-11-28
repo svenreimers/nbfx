@@ -290,6 +290,62 @@ public class DockUndoTest {
     }
 
     @Test
+    public void splitEdgeRedockIsUndoable() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = null;
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.redock.edge", "Redock"));
+                contentManager.open(content);
+                Tab tab = new Tab("Redock");
+                NbfxTabPane.setViewId(tab, "undo.redock.edge");
+                NbfxTabPane.attachTab(main, tab);
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Redock", null, null, false, 400, 300, true, false, null);
+                org.netbeans.api.nbfx.shell.DockWindow window = manager.floatContent(content.id(), options);
+                NbfxTabPane pane = (NbfxTabPane) tab.getTabPane();
+                DockRequest edge = new DockRequest(content.id(), pane.groupId(), PaneRole.MAIN,
+                        null, DockPlacement.EDGE_BOTTOM, TransferMode.MOVE, Set.of());
+
+                assertTrue(manager.redock(window, edge).decision().allowed());
+                assertTrue(Docking.area().contains(pane));
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertFalse(Docking.area().contains(pane));
+                assertEquals(1, manager.windows().size());
+                assertEquals(400, manager.windows().getFirst().window().getWidth(), 0.001);
+                assertEquals(300, manager.windows().getFirst().window().getHeight(), 0.001);
+                manager.redo();
+                assertTrue(Docking.area().contains(pane));
+                assertTrue(manager.canUndo());
+            } finally {
+                if (manager != null) {
+                    manager.windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                }
+                for (javafx.scene.control.TabPane p : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (p instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(p);
+                    }
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void rejectedRedoDoesNotRestoreUndoHistory() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);

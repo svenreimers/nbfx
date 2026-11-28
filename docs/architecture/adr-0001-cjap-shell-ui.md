@@ -342,6 +342,10 @@ api.plugins (T1)        → api.layer, api.resources
 - C3-2ad routes context-menu/pointer whole-group float through a package-private manager entry
   point, preserving pane screen bounds and reusing the same pane instead of rebuilding a detached
   pane. Unresolved groups or runtimes without a manager retain the legacy direct path.
+- C3-2ae records split/edge redock as a custom edit. Undo detaches the same pane and restores its
+  floating stage geometry/options; redo finds the current floating handle and reapplies the same
+  dock request. Group-placement redock still invalidates history until tab reconstruction is
+  represented explicitly.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

@@ -636,12 +636,36 @@ final class DefaultWindowManager implements WindowManager {
         if (!(window instanceof FloatingWindow floating) || floating.owner() != this) {
             return DockResult.rejected(DockDecision.reject("dock.window.missing"));
         }
+        double x = floating.stage().getX();
+        double y = floating.stage().getY();
+        double width = floating.stage().getWidth();
+        double height = floating.stage().getHeight();
+        WindowOptions options = floating.options();
+        DockGroupId group = floating.pane().groupId();
+        ContentId selected = NbfxTabPane.contentIdForTab(
+                floating.pane().getSelectionModel().getSelectedItem()).orElse(null);
         DockResult result = redockWindow(floating, request);
-        if (result.decision().allowed()) {
+        if (!result.decision().allowed()) {
+            return result;
+        }
+        if (isSplitPlacement(result.decision().placement()) || isEdgePlacement(result.decision().placement())) {
+            recordCustomEdit(() -> {
+                floatGroupAt(group, options, x, y);
+            }, () -> {
+                FloatingWindow current = floatingWindow(group);
+                return current != null && redockWindow(current, request).decision().allowed();
+            }, selected, () -> Docking.area() != null && paneForGroup(group) != null,
+                () -> Docking.area() != null && paneForGroup(group) != null);
+        } else {
             undoStack.clear();
             redoStack.clear();
         }
         return result;
+    }
+
+    private FloatingWindow floatingWindow(DockGroupId group) {
+        TabPane pane = paneForGroup(group);
+        return pane instanceof NbfxTabPane nbfx ? floating.get(nbfx) : null;
     }
 
     private DockResult redockWindow(FloatingWindow window, DockRequest request) {
