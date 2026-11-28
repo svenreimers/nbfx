@@ -19,13 +19,22 @@
 package org.netbeans.modules.nbfx.platform.shell;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import javafx.scene.control.Tab;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.Region;
 import javafx.stage.Stage;
 import org.junit.Test;
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
+import org.netbeans.api.nbfx.shell.ShellProfileSpec;
+import org.netbeans.api.nbfx.shell.WindowKind;
 import org.netbeans.api.nbfx.views.PaneKind;
+import org.netbeans.modules.nbfx.platform.workspace.WindowEnvironment;
 import org.netbeans.modules.nbfx.test.fx.JavaFxTestSupport;
+import org.openide.util.test.MockLookup;
 
 import static org.junit.Assert.*;
 
@@ -96,6 +105,52 @@ public class NbfxTabPaneFloatTest {
             } finally {
                 NbfxTabPane.closeFloatingPane(floating, false);
                 NbfxTabPane.unregister(floating);
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void detachedBarsReceiveProfileBeforeConfigurationAndShow() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            ShellProfileSpec profile = new ShellProfileSpec("floating-editor", WindowKind.FLOATING,
+                    Set.of(), null, false);
+            Region bars = new Region();
+            AtomicInteger builds = new AtomicInteger();
+            AtomicInteger configurations = new AtomicInteger();
+            WindowEnvironment environment = new WindowEnvironment() {
+                @Override
+                public Region createDetachedBars(
+                        javafx.beans.value.ObservableValue<org.netbeans.api.nbfx.editor.EditorDocument> activeDocument,
+                        List<org.netbeans.api.nbfx.actions.Command> scopedCommands,
+                        ShellChromeProfile selected) {
+                    builds.incrementAndGet();
+                    assertSame(profile, selected);
+                    assertEquals(0, configurations.get());
+                    return bars;
+                }
+            };
+            MockLookup.setInstances(environment);
+            NbfxTabPane floating = null;
+            try {
+                Tab tab = new Tab("Profile");
+                floating = (NbfxTabPane) NbfxTabPane.openDetachedWindow(
+                        List.of(tab), tab, 10, 20, 400, 300, profile, pane -> {
+                            configurations.incrementAndGet();
+                            assertEquals(1, builds.get());
+                            assertFalse(NbfxTabPane.stageOf(pane).isShowing());
+                        });
+                Stage stage = NbfxTabPane.stageOf(floating);
+                assertTrue(stage.isShowing());
+                assertEquals(1, builds.get());
+                assertEquals(1, configurations.get());
+                assertSame(bars, ((BorderPane) stage.getScene().getRoot()).getTop());
+            } finally {
+                if (floating != null) {
+                    NbfxTabPane.closeFloatingPane(floating, false);
+                    NbfxTabPane.unregister(floating);
+                }
+                MockLookup.setInstances();
             }
             return null;
         });

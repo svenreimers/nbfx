@@ -19,9 +19,13 @@
 package org.netbeans.modules.nbfx.platform.workspace;
 
 import java.util.List;
+import javafx.scene.layout.Region;
+import org.junit.Test;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
+
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
-import org.junit.Test;
+import static org.junit.Assert.assertSame;
 
 /**
  * Verifies that a host providing no environment still gets safe defaults from the
@@ -30,6 +34,21 @@ import org.junit.Test;
  * @since 1.0
  */
 public class WindowEnvironmentTest {
+
+    @Test
+    public void profileOverloadBridgesLegacyHosts() {
+        Region bars = new Region();
+        WindowEnvironment legacy = new WindowEnvironment() {
+            @Override
+            public Region createDetachedBars(
+                    javafx.beans.value.ObservableValue<org.netbeans.api.nbfx.editor.EditorDocument> activeDocument,
+                    List<org.netbeans.api.nbfx.actions.Command> scopedCommands) {
+                return bars;
+            }
+        };
+
+        assertSame(bars, legacy.createDetachedBars(null, List.of(), ShellChromeProfile.ALL));
+    }
 
     @Test
     public void defaultsAreSafe() {

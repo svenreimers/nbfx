@@ -25,7 +25,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javafx.scene.Node;
 import javafx.scene.control.Tab;
+import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.Pane;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
@@ -40,6 +42,7 @@ import org.netbeans.api.nbfx.shell.ChromeProfilePolicy;
 import org.netbeans.api.nbfx.shell.ChromeProfilePolicyProvider;
 import org.netbeans.api.nbfx.shell.DockWindow;
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
 import org.netbeans.api.nbfx.shell.WindowContent;
 import org.netbeans.api.nbfx.shell.WindowContentState;
 import org.netbeans.api.nbfx.shell.WindowId;
@@ -48,8 +51,10 @@ import org.netbeans.api.nbfx.shell.WindowOptions;
 import org.netbeans.api.nbfx.view.ViewProvider;
 import org.netbeans.api.nbfx.views.ViewContent;
 import org.netbeans.modules.nbfx.platform.content.DefaultContentManager;
+import org.netbeans.modules.nbfx.platform.workspace.WindowEnvironment;
 import org.netbeans.modules.nbfx.test.fx.JavaFxTestSupport;
 import org.openide.util.Lookup;
+import org.openide.util.test.MockLookup;
 import org.openide.util.lookup.Lookups;
 
 import static org.junit.Assert.assertEquals;
@@ -115,6 +120,119 @@ public class WindowChromeRuntimeTest {
                 if (runtime != null) {
                     runtime.dispose();
                 }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void floatPassesEffectiveProfileToDetachedBars() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = manager(contentManager,
+                    () -> services("presentation", "main"));
+            AtomicReference<ShellChromeProfile> received = new AtomicReference<>();
+            WindowEnvironment environment = new WindowEnvironment() {
+                @Override
+                public Region createDetachedBars(
+                        javafx.beans.value.ObservableValue<org.netbeans.api.nbfx.editor.EditorDocument> activeDocument,
+                        List<org.netbeans.api.nbfx.actions.Command> scopedCommands,
+                        ShellChromeProfile profile) {
+                    received.set(profile);
+                    return new Region();
+                }
+            };
+            MockLookup.setInstances(environment);
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                ViewContent content = new ViewContent(new FakeView("chrome.bars", "Bars"));
+                contentManager.open(content);
+                Tab tab = new Tab("Bars");
+                NbfxTabPane.setViewId(tab, "chrome.bars");
+                NbfxTabPane.attachTab(main, tab);
+
+                DockWindow window = manager.floatContent(content.id(), options(WindowKind.FLOATING));
+
+                assertSame(((FloatingWindow) window).options().profile(), received.get());
+                assertEquals("presentation", received.get().id());
+            } finally {
+                manager.windows().forEach(DockWindow::close);
+                NbfxTabPane.unregister(main);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                MockLookup.setInstances();
+            }
+            return null;
+        });
+    }
+
+    @Test
+    public void mixedGroupKeepsCreationProfileAndBarsWhenSelectionChanges() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = manager(contentManager, () -> Lookup.EMPTY);
+            AtomicReference<ShellChromeProfile> received = new AtomicReference<>();
+            AtomicInteger builds = new AtomicInteger();
+            Region bars = new Region();
+            WindowEnvironment environment = new WindowEnvironment() {
+                @Override
+                public Region createDetachedBars(
+                        javafx.beans.value.ObservableValue<org.netbeans.api.nbfx.editor.EditorDocument> activeDocument,
+                        List<org.netbeans.api.nbfx.actions.Command> scopedCommands,
+                        ShellChromeProfile profile) {
+                    builds.incrementAndGet();
+                    received.set(profile);
+                    return bars;
+                }
+            };
+            MockLookup.setInstances(environment);
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                ViewContent first = new ViewContent(new FakeView("chrome.mixed.first", "First",
+                        Lookups.singleton(new org.netbeans.api.nbfx.shell.ShellProfileHint("presentation"))));
+                ViewContent second = new ViewContent(new FakeView("chrome.mixed.second", "Second",
+                        Lookups.singleton(new org.netbeans.api.nbfx.shell.ShellProfileHint("floating-editor"))));
+                contentManager.open(first);
+                contentManager.open(second);
+                Tab firstTab = new Tab("First");
+                Tab secondTab = new Tab("Second");
+                NbfxTabPane.setViewId(firstTab, "chrome.mixed.first");
+                NbfxTabPane.setViewId(secondTab, "chrome.mixed.second");
+                NbfxTabPane.attachTab(navigator, firstTab);
+                NbfxTabPane.attachTab(navigator, secondTab);
+                navigator.getSelectionModel().select(firstTab);
+
+                DockWindow window = manager.floatGroup(navigator.groupId(), options(WindowKind.FLOATING));
+                Stage stage = (Stage) window.window();
+                assertEquals("presentation", received.get().id());
+                assertEquals(1, builds.get());
+                assertSame(bars, ((BorderPane) stage.getScene().getRoot()).getTop());
+
+                navigator.getSelectionModel().select(secondTab);
+
+                assertEquals("presentation", window.state().profileId());
+                assertSame(received.get(), ((FloatingWindow) window).options().profile());
+                assertEquals(1, builds.get());
+                assertSame(bars, ((BorderPane) stage.getScene().getRoot()).getTop());
+            } finally {
+                manager.windows().forEach(DockWindow::close);
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+                MockLookup.setInstances();
             }
             return null;
         });

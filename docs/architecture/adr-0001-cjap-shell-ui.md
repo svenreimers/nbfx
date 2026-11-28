@@ -395,6 +395,11 @@ api.plugins (T1)        → api.layer, api.resources
   effective profile. Restored detached windows use the same pre-show callback. This slice covers
   stage decoration and profile metadata only; detached menu/toolbar composition and persisted
   per-window profile/options remain follow-up work.
+- C3-3d passes the effective profile into detached-stage creation before bars are built. The window
+  environment publishes it in the per-window service lookup, and IDE detached chrome intersects it
+  with the legacy reduced menu/toolbar predicates while carrying the selected profile id for static
+  action filtering. Raw/manager-less detached paths retain the legacy fallback. Detached region
+  mounting, custom-window chrome and per-window option persistence remain separate work.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

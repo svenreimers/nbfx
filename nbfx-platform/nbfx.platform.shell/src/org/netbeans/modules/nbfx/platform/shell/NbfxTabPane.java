@@ -54,6 +54,7 @@ import org.netbeans.modules.nbfx.platform.workspace.WindowEnvironment;
 import org.netbeans.api.nbfx.layout.DockGroupId;
 import org.netbeans.api.nbfx.shell.PaneRole;
 import org.netbeans.api.nbfx.shell.ShellBranding;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
 import org.netbeans.api.nbfx.shell.WindowManager;
 import org.netbeans.api.nbfx.shell.WindowPaneHost;
 import org.netbeans.spi.nbfx.shell.WindowPane;
@@ -1693,6 +1694,11 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
      */
     static NbfxTabPane floatTab(Tab tab, double x, double y, double width, double height,
             java.util.function.Consumer<Stage> configure) {
+        return floatTab(tab, x, y, width, height, null, configure);
+    }
+
+    static NbfxTabPane floatTab(Tab tab, double x, double y, double width, double height,
+            ShellChromeProfile profile, java.util.function.Consumer<Stage> configure) {
         Objects.requireNonNull(tab, "tab");
         Objects.requireNonNull(configure, "configure");
         LOG.info(() -> "Detaching tab [" + titleOf(tab) + "] to a new window");
@@ -1703,7 +1709,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             source.getTabs().remove(tab);
         }
         attachTab(newPane, tab);
-        showDetachedPane(newPane, x, y, width, height, configure);
+        showDetachedPane(newPane, x, y, width, height, profile, configure);
         return newPane;
     }
 
@@ -1722,12 +1728,17 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
      */
     static void showDetachedPane(NbfxTabPane pane, double x, double y, double width, double height,
             java.util.function.Consumer<Stage> configure) {
+        showDetachedPane(pane, x, y, width, height, null, configure);
+    }
+
+    static void showDetachedPane(NbfxTabPane pane, double x, double y, double width, double height,
+            ShellChromeProfile profile, java.util.function.Consumer<Stage> configure) {
         Objects.requireNonNull(pane, "pane");
         Objects.requireNonNull(configure, "configure");
         if (stageOf(pane) != null) {
             throw new IllegalArgumentException("Pane is already in a window");
         }
-        Stage stage = createDetachedStage(pane, x, y, width, height);
+        Stage stage = createDetachedStage(pane, x, y, width, height, profile);
         configure.accept(stage);
         stage.show();
     }
@@ -1792,6 +1803,12 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
     /** Creates a detached window, running manager adoption/configuration before the first show. */
     static TabPane openDetachedWindow(List<Tab> tabs, Tab activeTab,
             double x, double y, double width, double height, Consumer<NbfxTabPane> beforeShow) {
+        return openDetachedWindow(tabs, activeTab, x, y, width, height, null, beforeShow);
+    }
+
+    static TabPane openDetachedWindow(List<Tab> tabs, Tab activeTab,
+            double x, double y, double width, double height,
+            ShellChromeProfile profile, Consumer<NbfxTabPane> beforeShow) {
         if (tabs == null || tabs.isEmpty()) {
             return null;
         }
@@ -1804,7 +1821,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
             }
           attachTab(newPane, tab);
         }
-        Stage stage = createDetachedStage(newPane, x, y, width, height);
+        Stage stage = createDetachedStage(newPane, x, y, width, height, profile);
         if (activeTab != null) {
             newPane.getSelectionModel().select(activeTab);
         }
@@ -1815,7 +1832,8 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
 
     /** Creates (but does not show) a detached {@link Stage} wrapping {@code newPane} at the bounds. */
     private static Stage createDetachedStage(TabPane newPane,
-                                             double x, double y, double width, double height) {
+                                             double x, double y, double width, double height,
+                                             ShellChromeProfile profile) {
         Stage stage = new Stage();
         stage.getProperties().put(FLOATING_WINDOW, Boolean.TRUE);
         newPane.getSelectionModel().selectedItemProperty().subscribe(newTab -> {
@@ -1832,7 +1850,7 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         if (environment != null) {
             ObservableValue<EditorDocument> activeDocument =
                     newPane.getSelectionModel().selectedItemProperty().map(NbfxTabPane::documentOf);
-            bars = environment.createDetachedBars(activeDocument, scopedCommands);
+            bars = environment.createDetachedBars(activeDocument, scopedCommands, profile);
             if (bars != null) {
                 root.setTop(bars);
             }

@@ -910,8 +910,10 @@ itself creates no undo edit and does not re-run dock policy; later hide/show/clo
 the normal manager lifecycle, and redock remains undoable. Restore uses neutral `CLOSE_CONTENT`
 options. C3-3c resolves the effective FLOATING/CUSTOM profile and decoration before the first show
 and retains the profile id in `WindowState`; restored detached windows use the same pre-show path.
-This is stage decoration/profile metadata, not detached menu/toolbar composition. Per-window option
-persistence and the all-window session schema remain follow-up work.
+C3-3d also delivers the effective profile to detached menu/toolbar creation before the stage is shown.
+IDE detached chrome intersects it with the legacy reduced predicates and uses the selected profile id
+for declarative static-action filtering. Detached region mounting, custom-window chrome, per-window
+option persistence and the all-window session schema remain follow-up work.
 
 ## 9. Shell frame and declarative chrome
 

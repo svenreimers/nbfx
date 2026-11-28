@@ -20,6 +20,7 @@ package org.netbeans.modules.nbfx.platform.workspace;
 
 import org.netbeans.api.nbfx.actions.Command;
 import org.netbeans.api.nbfx.editor.EditorDocument;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
 import java.util.List;
 import javafx.beans.value.ObservableValue;
 import javafx.scene.control.Tab;
@@ -54,6 +55,20 @@ public interface WindowEnvironment {
     default Region createDetachedBars(ObservableValue<EditorDocument> activeDocument,
             List<Command> scopedCommands) {
         return null;
+    }
+
+    /**
+     * Builds detached chrome for the window's effective profile. The default bridge preserves hosts
+     * that only implement the legacy two-argument method.
+     *
+     * @param activeDocument  the detached window's selected document, observed for changes
+     * @param scopedCommands  collects the window-scoped commands so the window can dispose them
+     * @param profile         the effective window profile, or {@code null} for legacy fallback
+     * @return the bars, or {@code null}
+     */
+    default Region createDetachedBars(ObservableValue<EditorDocument> activeDocument,
+            List<Command> scopedCommands, ShellChromeProfile profile) {
+        return createDetachedBars(activeDocument, scopedCommands);
     }
 
     /**

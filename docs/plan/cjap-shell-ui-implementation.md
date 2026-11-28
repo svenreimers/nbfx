@@ -377,7 +377,10 @@ Acceptance: keyboard and pointer split/move/float tests.
 - C3-3b adopts restored detached panes into `WindowManager`, preserving kind/tabs/selection/bounds;
   whole-pane redock is captured as a docked group rather than losing its tabs.
 - C3-3c resolves FLOATING/CUSTOM profile and decoration before first show and retains the effective
-  profile in window state; full detached chrome and per-window option persistence remain follow-up.
+  profile in window state.
+- C3-3d delivers that profile to detached bars before show; IDE chrome intersects it with the legacy
+  reduced predicates and uses its id for action filtering. Region mounting/custom chrome/persistence
+  remain follow-up.
 - Same content instance moves between windows; close policy is REDOCK/CLOSE_CONTENT/HIDE.
 - `FocusController` separates window activation, logical selection and keyboard focus.
 

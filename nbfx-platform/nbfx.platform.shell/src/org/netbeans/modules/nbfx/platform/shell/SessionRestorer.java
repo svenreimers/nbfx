@@ -503,7 +503,7 @@ public final class SessionRestorer {
             org.netbeans.api.nbfx.shell.WindowOptions options = manager.restoredFloatingOptions(
                     tabs, active, bounds[2], bounds[3]);
             return NbfxTabPane.openDetachedWindow(tabs, active,
-                    bounds[0], bounds[1], bounds[2], bounds[3], pane -> {
+                    bounds[0], bounds[1], bounds[2], bounds[3], options.profile(), pane -> {
                         pane.setKind(layout.kind());
                         manager.adoptRestoredFloating(pane, options);
                     });

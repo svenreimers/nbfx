@@ -310,6 +310,7 @@ final class DefaultWindowManager implements WindowManager {
                 NbfxTabPane.closeFloatingPane(pane, true, false);
             }
             NbfxTabPane.showDetachedPane(pane, state.x(), state.y(), state.width(), state.height(),
+                    state.options().profile(),
                     windowStageConfigurator(state.options(), state.x(), state.y()));
             registerFloating(pane, state.floatingAnchor(), state.options());
         } else {
@@ -858,7 +859,8 @@ final class DefaultWindowManager implements WindowManager {
             return existing;
         }
         Consumer<Stage> configure = windowStageConfigurator(checked, x, y);
-        NbfxTabPane pane = NbfxTabPane.floatTab(tab, x, y, checked.width(), checked.height(), configure);
+        NbfxTabPane pane = NbfxTabPane.floatTab(tab, x, y, checked.width(), checked.height(),
+                checked.profile(), configure);
         return registerFloating(pane, null, checked);
     }
 
@@ -934,7 +936,8 @@ final class DefaultWindowManager implements WindowManager {
         DockArea.Anchor<TabPane> anchor = area.detach(nbfx);
         nbfx.markFloating();
         Consumer<Stage> configure = windowStageConfigurator(checked, x, y);
-        NbfxTabPane.showDetachedPane(nbfx, x, y, checked.width(), checked.height(), configure);
+        NbfxTabPane.showDetachedPane(nbfx, x, y, checked.width(), checked.height(),
+                checked.profile(), configure);
         return registerFloating(nbfx, anchor, checked);
     }
 
@@ -1013,7 +1016,7 @@ final class DefaultWindowManager implements WindowManager {
                     NbfxTabPane.moveTab(floating.pane(), tabs.get(i), i);
                 }
                 NbfxTabPane.showDetachedPane(floating.pane(), x, y, width, height,
-                        windowStageConfigurator(options, x, y));
+                        options.profile(), windowStageConfigurator(options, x, y));
                 registerFloating(floating.pane(), null, options);
             }, () -> {
                 FloatingWindow current = floatingWindow(group);

@@ -45,6 +45,7 @@ import org.netbeans.api.nbfx.editor.EditorDocument;
 import org.netbeans.api.nbfx.shell.DockRequest;
 import org.netbeans.api.nbfx.shell.DockWindow;
 import org.netbeans.api.nbfx.shell.PaneRole;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
 import org.netbeans.api.nbfx.shell.ShellProfileHint;
 import org.netbeans.api.nbfx.shell.WindowClosePolicy;
 import org.netbeans.api.nbfx.shell.WindowKind;
@@ -53,12 +54,14 @@ import org.netbeans.api.nbfx.view.ViewProvider;
 import org.netbeans.api.nbfx.views.PaneKind;
 import org.netbeans.api.nbfx.views.ViewContent;
 import org.netbeans.modules.nbfx.platform.content.DefaultContentManager;
+import org.netbeans.modules.nbfx.platform.workspace.WindowEnvironment;
 import org.netbeans.modules.nbfx.platform.shell.AppState.Layout;
 import org.netbeans.modules.nbfx.platform.shell.AppState.PaneLayout;
 import org.netbeans.modules.nbfx.platform.shell.AppState.TabEntry;
 import org.netbeans.modules.nbfx.test.fx.JavaFxTestSupport;
 import org.openide.util.Lookup;
 import org.openide.util.lookup.Lookups;
+import org.openide.util.test.MockLookup;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -192,6 +195,20 @@ public class SessionRestorerTest {
     public void restoredDetachedWindowResolvesProfileBeforeShow() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             Fixture f = new Fixture(null, () -> Lookup.EMPTY);
+            AtomicReference<ShellChromeProfile> received = new AtomicReference<>();
+            AtomicInteger builds = new AtomicInteger();
+            WindowEnvironment environment = new WindowEnvironment() {
+                @Override
+                public Region createDetachedBars(
+                        javafx.beans.value.ObservableValue<EditorDocument> activeDocument,
+                        List<org.netbeans.api.nbfx.actions.Command> scopedCommands,
+                        ShellChromeProfile profile) {
+                    builds.incrementAndGet();
+                    received.set(profile);
+                    return new Region();
+                }
+            };
+            MockLookup.setInstances(environment);
             try {
                 ViewContent content = new ViewContent(new View("restore.profile", "Profile",
                         Lookups.singleton(new ShellProfileHint("presentation"))));
@@ -203,12 +220,18 @@ public class SessionRestorerTest {
 
                 assertEquals("presentation", window.state().profileId());
                 assertEquals(StageStyle.UNDECORATED, NbfxTabPane.stageOf(pane).getStyle());
+                assertSame(((FloatingWindow) window).options().profile(), received.get());
+                assertEquals(1, builds.get());
                 assertEquals(WindowClosePolicy.CLOSE_CONTENT, ((FloatingWindow) window).options().closePolicy());
                 assertFalse(((FloatingWindow) window).options().rememberBounds());
                 assertFalse(f.manager.canUndo());
                 assertFalse(f.manager.canRedo());
             } finally {
-                f.close();
+                try {
+                    f.close();
+                } finally {
+                    MockLookup.setInstances();
+                }
             }
             return null;
         });

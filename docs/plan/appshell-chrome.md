@@ -311,7 +311,7 @@ public interface DetachedBarsFactory {
 }
 ```
 
-No `ObservableValue<EditorDocument>` in the new factory. The existing `WindowEnvironment.createDetachedBars(ObservableValue<EditorDocument>, ...)` is legacy debt; do not extend it.
+No `ObservableValue<EditorDocument>` belongs in a new factory. C3-3d adds a narrow default profile-aware overload to the existing `WindowEnvironment.createDetachedBars(ObservableValue<EditorDocument>, ...)` bridge so the effective window profile reaches detached chrome before show; the two-argument method remains the compatibility fallback. Further extension of that legacy seam should be avoided.
 
 ### 5.10 Application menu
 

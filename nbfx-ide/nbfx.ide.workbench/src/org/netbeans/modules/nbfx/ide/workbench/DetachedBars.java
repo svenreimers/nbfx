@@ -30,8 +30,10 @@ import org.netbeans.modules.nbfx.platform.shell.ShellToolBars;
 import org.netbeans.modules.nbfx.platform.shell.ToolBarContainer;
 import org.netbeans.modules.nbfx.platform.shell.ToolBarHost;
 import org.netbeans.api.nbfx.shell.DetachedBarsContext;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
 import org.netbeans.api.nbfx.shell.ShellContext;
 import org.openide.util.Lookup;
+import org.openide.util.lookup.InstanceContent;
 import org.openide.util.lookup.Lookups;
 import org.openide.util.lookup.ProxyLookup;
 
@@ -47,10 +49,15 @@ public final class DetachedBars {
     public static Region create(DetachedBarsContext context, ToolBarHost mainToolBars) {
         ObservableValue<EditorDocument> scope = context.activeDocument(EditorDocument.class);
         ActionRegistry registry = context.services().lookup(ActionRegistry.class);
-        Lookup base = new ProxyLookup(Lookups.fixed(
+        ShellChromeProfile selected = context.services().lookup(ShellChromeProfile.class);
+        if (selected == null) {
+            selected = ShellChromeProfile.ALL;
+        }
+        ShellChromeProfile detached = new DetachedChromeProfile(selected);
+        Lookup services = new ProxyLookup(Lookups.fixed(
                 new IdeShellCommandResolver(registry, scope, null, context.scopedCommands()),
-                new DetachedChromeProfile(),
                 IdeShellIconProvider.INSTANCE), context.services());
+        Lookup base = withProfile(services, detached);
         ShellContext shellContext = new ShellContext(base);
 
         ShellToolBars toolBars = new ShellToolBars(shellContext);
@@ -59,6 +66,58 @@ public final class DetachedBars {
                 Lookups.fixed(menuBars), base));
         ShellMenuBar menu = new ShellMenuBar(menuContext);
         return new DetachedChrome(menu, toolBars.container(), mainToolBars);
+    }
+
+    private static Lookup withProfile(Lookup delegate, ShellChromeProfile profile) {
+        return new Lookup() {
+            @Override
+            public <T> T lookup(Class<T> type) {
+                return type == ShellChromeProfile.class ? type.cast(profile) : delegate.lookup(type);
+            }
+
+            @Override
+            public <T> Result<T> lookup(Lookup.Template<T> template) {
+                if (template.getType() != ShellChromeProfile.class) {
+                    return delegate.lookup(template);
+                }
+                if ((template.getId() != null && !template.getId().equals(profile.id()))
+                        || (template.getInstance() != null && template.getInstance() != profile)) {
+                    return Lookup.EMPTY.lookup(template);
+                }
+                return profileLookup(profile).lookup(new Lookup.Template<>(template.getType()));
+            }
+
+            @Override
+            public <T> Result<T> lookupResult(Class<T> type) {
+                return type == ShellChromeProfile.class
+                        ? profileLookup(profile).lookupResult(type) : delegate.lookupResult(type);
+            }
+
+            private Lookup profileLookup(ShellChromeProfile selected) {
+                return Lookups.fixed(new ShellChromeProfile[]{selected},
+                        new InstanceContent.Convertor<>() {
+                            @Override
+                            public ShellChromeProfile convert(ShellChromeProfile obj) {
+                                return obj;
+                            }
+
+                            @Override
+                            public Class<? extends ShellChromeProfile> type(ShellChromeProfile obj) {
+                                return ShellChromeProfile.class;
+                            }
+
+                            @Override
+                            public String id(ShellChromeProfile obj) {
+                                return obj.id();
+                            }
+
+                            @Override
+                            public String displayName(ShellChromeProfile obj) {
+                                return obj.id();
+                            }
+                        });
+            }
+        };
     }
 
     private static final class DetachedChrome extends VBox implements DisposableChrome {

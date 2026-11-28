@@ -18,12 +18,15 @@
  */
 package org.netbeans.modules.nbfx.ide.workbench;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import javafx.application.Platform;
@@ -47,6 +50,11 @@ import org.netbeans.junit.NbTestCase;
 import org.netbeans.modules.nbfx.platform.shell.ToolBarContainer;
 import org.netbeans.modules.nbfx.platform.shell.ToolBarHost;
 import org.netbeans.api.nbfx.shell.DetachedBarsContext;
+import org.netbeans.api.nbfx.shell.ShellChromeProfile;
+import org.netbeans.api.nbfx.shell.ShellProfileSpec;
+import org.netbeans.api.nbfx.shell.WindowKind;
+import org.openide.filesystems.FileObject;
+import org.openide.filesystems.FileUtil;
 import org.openide.util.Lookup;
 import org.openide.util.lookup.Lookups;
 import org.openide.util.lookup.ProxyLookup;
@@ -114,6 +122,98 @@ public class DetachedBarsTest extends NbTestCase {
         });
     }
 
+    public void testSelectedProfileNarrowsLegacyChrome() throws Exception {
+        startFx();
+        ScenarioSupport.onFx(() -> {
+            RecordingRegistry registry = new RecordingRegistry();
+            ShellChromeProfile selected = new ShellChromeProfile() {
+                @Override
+                public boolean includeMenu(String menuId) {
+                    return "File".equals(menuId) || "View".equals(menuId);
+                }
+
+                @Override
+                public boolean includeMenuItem(String menuId, String itemId) {
+                    return !"File".equals(menuId) || ActionIds.SAVE.equals(itemId);
+                }
+
+                @Override
+                public boolean includeToolBar(String toolBarId) {
+                    return "file".equals(toolBarId) || "edit".equals(toolBarId);
+                }
+
+                @Override
+                public boolean includeToolBarItem(String toolBarId, String itemId) {
+                    return !"file".equals(toolBarId) || ActionIds.SAVE.equals(itemId);
+                }
+
+                @Override
+                public boolean useSystemMenuBar() {
+                    return false;
+                }
+
+                @Override
+                public String id() {
+                    return "floating-editor";
+                }
+            };
+            DetachedBarsContext context = new DetachedBarsContext(
+                    new ProxyLookup(Lookups.fixed(registry, selected), Lookup.getDefault()),
+                    new SimpleObjectProperty<EditorDocument>(), new ArrayList<>());
+            VBox box = (VBox) DetachedBars.create(context, null);
+            MenuBar menuBar = (MenuBar) box.getChildren().get(0);
+            ToolBarContainer toolBars = (ToolBarContainer) box.getChildren().get(1);
+
+            assertEquals(List.of("File", "View"), menuIds(menuBar));
+            assertFalse(menuBar.isUseSystemMenuBar());
+            assertEquals(List.of(ActionIds.SAVE), itemTexts(menu(menuBar, "File")));
+            assertEquals(List.of("file", "edit"),
+                    toolBars.getToolBars().stream().map(ToolBar::getId).toList());
+            assertEquals(1, toolBars.getToolBars().get(0).getItems().size());
+            for (ToolBar bar : toolBars.getToolBars()) {
+                if (!bar.getItems().isEmpty()) {
+                    assertFalse(bar.getItems().get(0).getStyleClass().contains("toolbar-drag-handle"));
+                }
+            }
+            return null;
+        });
+    }
+
+    public void testSelectedProfileFiltersStaticActionReferences() throws Exception {
+        startFx();
+        ScenarioSupport.onFx(() -> {
+            RecordingRegistry registry = new RecordingRegistry();
+            ShellProfileSpec selected = new ShellProfileSpec("floating-editor", WindowKind.FLOATING,
+                    Set.of(), null, false);
+            FileObject view = FileUtil.createFolder(FileUtil.getConfigRoot(), "NbFx/Menus/View");
+            FileObject any = createRef(view, "chrome-any.ref", "chrome.any", 910);
+            FileObject main = createRef(view, "chrome-main.ref", "chrome.main", 911);
+            FileObject floating = createRef(view, "chrome-floating.ref", "chrome.floating", 912);
+            FileObject other = createRef(view, "chrome-other.ref", "chrome.other", 913);
+            main.setAttribute("profiles", "main");
+            floating.setAttribute("profiles", "floating-editor");
+            other.setAttribute("profiles", "some-other-profile");
+            try {
+                DetachedBarsContext context = new DetachedBarsContext(
+                        new ProxyLookup(Lookups.fixed(registry, selected), Lookup.getDefault()),
+                        new SimpleObjectProperty<EditorDocument>(), new ArrayList<>());
+                VBox box = (VBox) DetachedBars.create(context, null);
+                Menu viewMenu = menu((MenuBar) box.getChildren().get(0), "View");
+
+                assertTrue(hasText(viewMenu, "chrome.any"));
+                assertTrue(hasText(viewMenu, "chrome.floating"));
+                assertFalse(hasText(viewMenu, "chrome.main"));
+                assertFalse(hasText(viewMenu, "chrome.other"));
+            } finally {
+                deleteTree(any);
+                deleteTree(main);
+                deleteTree(floating);
+                deleteTree(other);
+            }
+            return null;
+        });
+    }
+
     public void testViewMenuTogglesTheMainToolBars() throws Exception {
         startFx();
         ScenarioSupport.onFx(() -> {
@@ -153,6 +253,31 @@ public class DetachedBarsTest extends NbTestCase {
             assertFalse("a hidden detached toolbar still takes up space", detachedFile.isManaged());
             return null;
         });
+    }
+
+    private static FileObject createRef(FileObject folder, String name, String actionId, int position) {
+        try {
+            FileObject ref = FileUtil.createData(folder, name);
+            ref.setAttribute("actionId", actionId);
+            ref.setAttribute("position", position);
+            return ref;
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    private static void deleteTree(FileObject file) {
+        if (file == null) {
+            return;
+        }
+        for (FileObject child : file.getChildren()) {
+            deleteTree(child);
+        }
+        try {
+            file.delete();
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
     }
 
     private static void startFx() throws Exception {
