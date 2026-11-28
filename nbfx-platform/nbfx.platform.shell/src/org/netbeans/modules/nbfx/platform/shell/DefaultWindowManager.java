@@ -86,8 +86,8 @@ final class DefaultWindowManager implements WindowManager {
     }
 
     private record DockEdit(List<ContentId> contents, List<Location> undoLocations,
-            Supplier<Boolean> redo, ContentId selected, BooleanSupplier undoApplicable,
-            BooleanSupplier redoApplicable) {
+            Runnable undo, Supplier<Boolean> redo, ContentId selected,
+            BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
     }
 
     DefaultWindowManager(ContentManager contentManager) {
@@ -390,9 +390,13 @@ final class DefaultWindowManager implements WindowManager {
             return;
         }
         DockEdit edit = undoStack.pop();
-        for (int i = 0; i < edit.contents().size(); i++) {
-            Location location = edit.undoLocations().get(i);
-            moveInternal(edit.contents().get(i), location.group(), location.index(), false);
+        if (edit.undo() != null) {
+            edit.undo().run();
+        } else {
+            for (int i = 0; i < edit.contents().size(); i++) {
+                Location location = edit.undoLocations().get(i);
+                moveInternal(edit.contents().get(i), location.group(), location.index(), false);
+            }
         }
         if (edit.selected() != null) {
             select(edit.selected());
@@ -441,15 +445,31 @@ final class DefaultWindowManager implements WindowManager {
 
     private void recordGroupEdit(List<ContentId> contents, List<Location> undoLocations,
             ContentId selected, Supplier<Boolean> redo) {
+        recordGroupEdit(contents, undoLocations, null, selected, redo,
+                () -> undoLocations.stream().allMatch(location -> paneForGroup(location.group()) != null)
+                        && contents.stream().allMatch(content -> findTab(content).isPresent()),
+                () -> contents.stream().allMatch(content -> findTab(content).isPresent()));
+    }
+
+    private void recordGroupEdit(List<ContentId> contents, List<Location> undoLocations,
+            Runnable undo, ContentId selected, Supplier<Boolean> redo,
+            BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
         if (contents.isEmpty() || contents.size() != undoLocations.size()) {
             return;
         }
         redoStack.clear();
-        DockEdit edit = new DockEdit(List.copyOf(contents), List.copyOf(undoLocations), redo, selected,
-                () -> undoLocations.stream().allMatch(location -> paneForGroup(location.group()) != null)
-                        && contents.stream().allMatch(content -> findTab(content).isPresent()),
-                () -> contents.stream().allMatch(content -> findTab(content).isPresent()));
-        undoStack.push(edit);
+        undoStack.push(new DockEdit(List.copyOf(contents), List.copyOf(undoLocations), undo,
+                redo, selected, undoApplicable, redoApplicable));
+        while (undoStack.size() > 100) {
+            undoStack.removeLast();
+        }
+    }
+
+    private void recordCustomEdit(Runnable undo, Supplier<Boolean> redo, ContentId selected,
+            BooleanSupplier undoApplicable, BooleanSupplier redoApplicable) {
+        redoStack.clear();
+        undoStack.push(new DockEdit(List.of(), List.of(), undo, redo, selected,
+                undoApplicable, redoApplicable));
         while (undoStack.size() > 100) {
             undoStack.removeLast();
         }
@@ -507,16 +527,36 @@ final class DefaultWindowManager implements WindowManager {
 
     @Override
     public DockWindow floatGroup(DockGroupId group, WindowOptions options) {
-        DockWindow window = floatGroupWindow(group, options);
-        undoStack.clear();
-        redoStack.clear();
-        return window;
+        WindowOptions checked = requireFloatingOptions(options);
+        return floatGroupRecorded(group, checked, defaultFloatingX(checked), defaultFloatingY(checked));
     }
 
-    private FloatingWindow floatGroupWindow(DockGroupId group, WindowOptions options) {
-        Objects.requireNonNull(group, "group");
-        WindowOptions checked = requireFloatingOptions(options);
-        return floatGroupAt(group, checked, defaultFloatingX(checked), defaultFloatingY(checked));
+    private DockWindow floatGroupRecorded(DockGroupId group, WindowOptions options, double x, double y) {
+        TabPane pane = paneForGroup(group);
+        boolean alreadyFloating = pane instanceof NbfxTabPane nbfx && NbfxTabPane.isFloatingPane(nbfx);
+        ContentId selected = null;
+        if (pane != null && pane.getSelectionModel().getSelectedItem() != null) {
+            selected = NbfxTabPane.contentIdForTab(pane.getSelectionModel().getSelectedItem()).orElse(null);
+        }
+        FloatingWindow window = floatGroupAt(group, options, x, y);
+        if (alreadyFloating) {
+            return window;
+        }
+        DockArea.Anchor<TabPane> anchor = window.anchor();
+        if (anchor != null) {
+            recordCustomEdit(() -> {
+                NbfxTabPane.closeFloatingPane(window.pane(), true);
+                Docking.area().reattach(window.pane(), anchor);
+            }, () -> {
+                floatGroupAt(group, options, x, y);
+                return true;
+            }, selected, () -> Docking.area() != null && paneForGroup(group) != null,
+                () -> Docking.area() != null && paneForGroup(group) != null);
+        } else {
+            undoStack.clear();
+            redoStack.clear();
+        }
+        return window;
     }
 
     private FloatingWindow floatGroupAt(DockGroupId group, WindowOptions options, double x, double y) {

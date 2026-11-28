@@ -1727,7 +1727,9 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
      */
     static boolean isFloatingPane(TabPane pane) {
         Stage stage = stageOf(pane);
-        return stage != null && Boolean.TRUE.equals(stage.getProperties().get(FLOATING_WINDOW));
+        DockArea<TabPane> area = Docking.area();
+        return stage != null && Boolean.TRUE.equals(stage.getProperties().get(FLOATING_WINDOW))
+                && (area == null || !area.contains(pane));
     }
 
     static boolean isClosingWindow(Stage stage) {
@@ -1750,6 +1752,9 @@ public final class NbfxTabPane extends TabPane implements WindowPaneHost {
         }
         stage.getProperties().put(CLOSING_WINDOW, Boolean.TRUE);
         stage.close();
+        if (preserveContent && stage.getScene() != null) {
+            stage.setScene(null);
+        }
     }
 
     /**

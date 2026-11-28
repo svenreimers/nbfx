@@ -233,6 +233,63 @@ public class DockUndoTest {
     }
 
     @Test
+    public void groupFloatUndoRestoresFormerAreaAnchor() throws InterruptedException {
+        JavaFxTestSupport.onFx(() -> {
+            NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);
+            NbfxTabPane navigator = new NbfxTabPane(PaneRole.NAVIGATOR);
+            DefaultContentManager contentManager = new DefaultContentManager();
+            DefaultWindowManager manager = null;
+            try {
+                Map<String, NbfxTabPane> panes = new LinkedHashMap<>();
+                panes.put(PaneRole.MAIN.name(), main);
+                panes.put(PaneRole.NAVIGATOR.name(), navigator);
+                Docking.create(new WindowComposition(List.of(), null), panes);
+                manager = new DefaultWindowManager(contentManager);
+                ViewContent content = new ViewContent(new FakeView("undo.group.float", "Group Float"));
+                contentManager.open(content);
+                Tab tab = new Tab("Group Float");
+                NbfxTabPane.setViewId(tab, "undo.group.float");
+                NbfxTabPane.attachTab(main, tab);
+                DockRequest split = new DockRequest(content.id(), main.groupId(), null,
+                        main.groupId(), DockPlacement.SPLIT_RIGHT, TransferMode.MOVE, Set.of());
+                DockGroupId group = manager.dock(split).group();
+                NbfxTabPane pane = (NbfxTabPane) tab.getTabPane();
+                String before = org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree());
+                WindowOptions options = new WindowOptions(org.netbeans.api.nbfx.shell.WindowKind.FLOATING,
+                        null, "Group Float", null, null, false, 400, 300, true, false, null);
+
+                manager.floatGroup(group, options);
+                assertFalse(Docking.area().contains(pane));
+                assertTrue(manager.canUndo());
+                manager.undo();
+                assertTrue(Docking.area().contains(pane));
+                assertEquals(before, org.netbeans.modules.nbfx.platform.workspace.DockTrees.format(
+                        Docking.area().tree()));
+                manager.redo();
+                assertFalse(Docking.area().contains(pane));
+                assertTrue(manager.canUndo());
+            } finally {
+                if (manager != null) {
+                    manager.windows().forEach(org.netbeans.api.nbfx.shell.DockWindow::close);
+                }
+                for (javafx.scene.control.TabPane p : new java.util.ArrayList<>(NbfxTabPane.panesByRole())) {
+                    if (p instanceof NbfxTabPane nbfx && nbfx.role() == PaneRole.DOCKED) {
+                        NbfxTabPane.unregister(p);
+                    }
+                }
+                NbfxTabPane.unregister(main);
+                NbfxTabPane.unregister(navigator);
+                DockRuntime runtime = Docking.runtime();
+                if (runtime != null) {
+                    runtime.dispose();
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
     public void rejectedRedoDoesNotRestoreUndoHistory() throws InterruptedException {
         JavaFxTestSupport.onFx(() -> {
             NbfxTabPane main = new NbfxTabPane(PaneRole.MAIN);

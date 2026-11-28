@@ -335,6 +335,10 @@ api.plugins (T1)        → api.layer, api.resources
   point, preserving screen coordinates and default window options while gaining the same undo
   edit. Unresolved content or runtimes without a manager retain direct detach; whole-group float
   and redock remain history-invalidating.
+- C3-2ac adds `DockArea.reattach(pane, anchor)` and uses it as the inverse of whole-group float.
+  Group float now records one custom edit: undo closes the floating stage without closing content
+  and restores the exact former split position/share; redo detaches and floats the same pane
+  again. Redock remains history-invalidating.
 - C4-3c adds `DropRouter` in `platform.content` as the first routing/discovery primitive:
   handlers are discovered from `Lookup.getDefault()` and the `NbFx/DropHandlers` layer path;
   `resolve(...)` tries caller-supplied targets in priority order, returning the first handler

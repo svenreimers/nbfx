@@ -918,6 +918,29 @@ public final class DockArea<N extends Node> extends StackPane {
                 + (target.isArea() ? " of the area" : " of a pane"));
     }
 
+    /**
+     * Reattaches a pane removed by {@link #detach(Node)} at its former anchor, preserving identity,
+     * content, split position and share. A {@code null} anchor uses the pane's default side.
+     *
+     * @param pane the detached pane
+     * @param anchor the anchor returned by {@link #detach(Node)}, or {@code null}
+     * @throws IllegalArgumentException when the pane is main, already attached, minimized or set aside
+     */
+    public void reattach(N pane, Anchor<N> anchor) {
+        Objects.requireNonNull(pane, "pane");
+        if (pane == mainPane()) {
+            throw new IllegalArgumentException("The main pane cannot be reattached");
+        }
+        if (contains(pane) || minimized.contains(pane) || isSetAside(pane)) {
+            throw new IllegalArgumentException("Pane is not detached");
+        }
+        unmaximize();
+        anchors.put(pane, anchor);
+        reattach(pane);
+        LOG.fine(() -> "Reattached a detached pane"
+                + (anchor == null ? " at its default position" : " at its former anchor"));
+    }
+
     /** Draws the drop line where {@code target} (see {@link #dropTargetAt}) would dock a component. */
     public void showDropLine(DropTarget<N> target) {
         showDropLine(target.isArea() ? this : target.pane(), target.side());

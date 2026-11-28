@@ -629,6 +629,24 @@ public class DockAreaTest {
     }
 
     @Test
+    public void detachedPaneCanBeReattachedAtFormerAnchor() throws Exception {
+        Fixture f = onFx(Fixture::new);
+        onFx(() -> {
+            StackPane docked = f.area.split(f.main, Side.RIGHT);
+            docked.getChildren().add(new Region());
+            String before = DockTrees.format(f.area.tree());
+
+            Anchor<StackPane> anchor = f.area.detach(docked);
+            f.area.reattach(docked, anchor);
+
+            assertTrue(f.area.contains(docked));
+            assertEquals(before, DockTrees.format(f.area.tree()));
+            assertEquals(List.of(f.navigator, f.main, docked), f.area.leaves());
+            return null;
+        });
+    }
+
+    @Test
     public void mainPaneCannotBeMinimized() throws Exception {
         Fixture f = onFx(Fixture::new);
         onFx(() -> {
